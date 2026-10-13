@@ -1380,9 +1380,18 @@ bool FramebufferManagerCommon::BindFramebufferAsColorTexture(int stage, VirtualF
 		WARN_LOG_ONCE(selfTextureCopy, Log::G3D, "Attempting to texture from current render target (src=%08x / target=%08x / flags=%d), making a copy", framebuffer->fb_address, currentRenderVfb_->fb_address, flags);
 		// TODO: Maybe merge with bvfbs_?  Not sure if those could be packing, and they're created at a different size.
 		if (currentFramebufferCopy_ && (flags & BINDFBCOLOR_UNCACHED) == 0) {
-			// We have a copy already that hasn't been invalidated, let's keep using it.
-			draw_->BindFramebufferAsTexture(currentFramebufferCopy_, stage, Draw::Aspect::COLOR_BIT, layer);
-			return true;
+			// We have a copy already that hasn't been invalidated. It only holds what was drawn when it was made, though,
+			// and draws since can have reached past that: Silent Hill: Origins downsamples its light buffer into the
+			// undrawn space beside it and reads that back, with no TEXFLUSH in between, so the old copy gave it black
+			// and the whole room went dark (#16126). Keep using it only if it covers what this draw reads.
+			int x, y, w, h;
+			GetColorTextureCopyRect(framebuffer, flags, &x, &y, &w, &h);
+			const CopyRect &c = currentFramebufferCopyRect_;
+			if (w <= 0 || h <= 0 || (x >= c.x && y >= c.y && x + w <= c.x + c.w && y + h <= c.y + c.h)) {
+				draw_->BindFramebufferAsTexture(currentFramebufferCopy_, stage, Draw::Aspect::COLOR_BIT, layer);
+				return true;
+			}
+			currentFramebufferCopy_ = nullptr;
 		}
 
 		// There's a special case we can handle here, where the game is texturing from the same pixels being read, in order to
@@ -1437,13 +1446,13 @@ bool FramebufferManagerCommon::BindFramebufferAsColorTexture(int stage, VirtualF
 	}
 }
 
-void FramebufferManagerCommon::CopyFramebufferForColorTexture(VirtualFramebuffer *dst, VirtualFramebuffer *src, int flags, int layer, bool *partial) {
-	int x = 0;
-	int y = 0;
-	int w = src->drawnWidth;
-	int h = src->drawnHeight;
-
-	*partial = false;
+// The part of the render target a draw texturing from it needs copied: what it was drawn in, or with
+// BINDFBCOLOR_MAY_COPY_WITH_UV, just what the draw's UVs cover. Returns whether it cropped to the UVs.
+bool FramebufferManagerCommon::GetColorTextureCopyRect(const VirtualFramebuffer *src, int flags, int *x, int *y, int *w, int *h) const {
+	*x = 0;
+	*y = 0;
+	*w = src->drawnWidth;
+	*h = src->drawnHeight;
 
 	// If max is not > min, we probably could not detect it.  Skip.
 	// See the vertex decoder, where this is updated.
@@ -1455,27 +1464,36 @@ void FramebufferManagerCommon::CopyFramebufferForColorTexture(VirtualFramebuffer
 		const int texelsPerPixel = gstate.getTextureFormat() == GE_TFMT_CLUT8 ? BufferFormatBytesPerPixel(src->fb_format) : 1;
 		const int minU = gstate_c.vertBounds.minU / texelsPerPixel;
 		const int maxU = (gstate_c.vertBounds.maxU + texelsPerPixel - 1) / texelsPerPixel;
-		x = std::max(minU - 1, 0);
-		y = std::max(gstate_c.vertBounds.minV - 1, 0);
-		w = std::min(maxU + 1, (int)src->drawnWidth) - x;
-		h = std::min(gstate_c.vertBounds.maxV + 1, (int)src->drawnHeight) - y;
+		*x = std::max(minU - 1, 0);
+		*y = std::max(gstate_c.vertBounds.minV - 1, 0);
+		*w = std::min(maxU + 1, (int)src->drawnWidth) - *x;
+		*h = std::min(gstate_c.vertBounds.maxV + 1, (int)src->drawnHeight) - *y;
 
 		// If we bound a framebuffer, apply the byte offset as pixels to the copy too.
 		if (flags & BINDFBCOLOR_APPLY_TEX_OFFSET) {
-			x += gstate_c.curTextureXOffset / texelsPerPixel;
-			y += gstate_c.curTextureYOffset;
+			*x += gstate_c.curTextureXOffset / texelsPerPixel;
+			*y += gstate_c.curTextureYOffset;
 		}
+		return true;
+	}
+	return false;
+}
 
+void FramebufferManagerCommon::CopyFramebufferForColorTexture(VirtualFramebuffer *dst, VirtualFramebuffer *src, int flags, int layer, bool *partial) {
+	int x, y, w, h;
+	if (GetColorTextureCopyRect(src, flags, &x, &y, &w, &h)) {
 		// We'll have to reapply these next time since we cropped to UV.
 		gstate_c.Dirty(DIRTY_TEXTURE_PARAMS);
 	}
 
+	*partial = false;
 	if (x < src->drawnWidth && y < src->drawnHeight && w > 0 && h > 0) {
 		if (x != 0 || y != 0 || w < src->drawnWidth || h < src->drawnHeight) {
 			*partial = true;
 		}
 		BlitFramebuffer(dst, x, y, src, x, y, w, h, 0, RASTER_COLOR, "CopyFBForColorTexture");
 	}
+	currentFramebufferCopyRect_ = { x, y, w, h };
 }
 
 Draw::Texture *FramebufferManagerCommon::MakePixelTexture(const u8 *srcPixels, GEBufferFormat srcPixelFormat, int srcStride, int width, int height) {
