@@ -593,6 +593,7 @@ protected:
 	void BlitFramebuffer(VirtualFramebuffer *dst, int dstX, int dstY, VirtualFramebuffer *src, int srcX, int srcY, int w, int h, int bpp, RasterChannel channel, const char *tag);
 
 	void CopyFramebufferForColorTexture(VirtualFramebuffer *dst, VirtualFramebuffer *src, int flags, int layer, bool *partial);
+	bool GetColorTextureCopyRect(const VirtualFramebuffer *src, int flags, int *x, int *y, int *w, int *h) const;
 
 	void EstimateDrawingSize(u32 fb_address, int fb_stride, GEBufferFormat fb_format, int viewport_width, int viewport_height, int region_width, int region_height, int scissor_width, int scissor_height, int &drawing_width, int &drawing_height);
 
@@ -666,6 +667,10 @@ protected:
 	VirtualFramebuffer *currentRenderVfb_ = nullptr;
 
 	Draw::Framebuffer *currentFramebufferCopy_ = nullptr;
+	// What part of the render target the last copy for texturing holds, in PSP pixels, and which FBO it went
+	// to. The uncached copy for a draw reading with a write mask goes to its own FBO.
+	struct CopyRect { Draw::Framebuffer *fbo; int x, y, w, h; };
+	CopyRect currentFramebufferCopyRect_{};
 	// A draw with a write mask only reads the bits the mask keeps, and doesn't change them. So while the same
 	// mask draws on, without blending or a logic op, one copy serves every draw: DBZ Tenkaichi Tag Team draws
 	// its shadows one bit at a time, which took a copy per flush.
