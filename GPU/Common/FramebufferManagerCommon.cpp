@@ -391,6 +391,7 @@ VirtualFramebuffer *FramebufferManagerCommon::DoSetRenderFrameBuffer(Framebuffer
 	if (params.fb_address != lastRenderAddress_) {
 		lastRenderAddress_ = params.fb_address;
 		depthShiftedFor_ = 0;
+		depthRoundedFor_ = 0;
 		// Moving to an X offset can keep the same framebuffer, and the depth handling has to run again for it.
 		gstate_c.usingDepth = false;
 	}
@@ -617,6 +618,7 @@ VirtualFramebuffer *FramebufferManagerCommon::DoSetRenderFrameBuffer(Framebuffer
 	gstate_c.curRTHeight = vfb->bufferHeight;
 	gstate_c.curRTRenderWidth = vfb->renderWidth;
 	gstate_c.curRTRenderHeight = vfb->renderHeight;
+	UpdateDepthRoundingForTarget();
 	return vfb;
 }
 
@@ -662,7 +664,10 @@ void FramebufferManagerCommon::SetDepthFrameBuffer(bool isClearingDepth) {
 	if (!isClearingDepth && useBufferedRendering_ && gstate_c.curRTOffsetX > 0 && depthShiftedFor_ != lastRenderAddress_ &&
 		sameDepthBuffer) {
 		depthShiftedFor_ = lastRenderAddress_;
-		ShiftDepthForOffsetRendering(currentRenderVfb_, gstate_c.curRTOffsetX);
+		if (ShiftDepthForOffsetRendering(currentRenderVfb_, gstate_c.curRTOffsetX)) {
+			depthRoundedFor_ = lastRenderAddress_;
+		}
+		UpdateDepthRoundingForTarget();
 	}
 
 	// If this first draw call is anything other than a clear, "resolve" the depth buffer,
@@ -1068,26 +1073,81 @@ void FramebufferManagerCommon::CopyDepthRect(Draw::Framebuffer *src, int srcX, i
 }
 
 // Copies the depth at x in [0, xOffset) to [xOffset, 2 * xOffset), through a temporary buffer.
-void FramebufferManagerCommon::ShiftDepthForOffsetRendering(VirtualFramebuffer *vfb, int xOffset) {
-	if (!vfb->fbo) {
-		return;
+//
+// The pass at the offset then draws the same geometry the scene pass drew at the unshifted position, but somewhere else
+// in the buffer, and the GPU doesn't give it exactly the same depth there: the window coordinates go through different
+// float math, and some GPUs interpolate depth from the buffer's origin. Off by a hair, an EQUAL test fails on scattered
+// pixels, which Silent Hill: Origins shows as black specks in its flashlight (#16126). On the PSP both passes hit the
+// same 16-bit values, so where we can, the copy rounds depth to those, and the pass's draws round theirs the same way
+// (FS_BIT_ROUND_DEPTH), as PixelDepthRounding does for a whole game. Returns whether it rounded.
+bool FramebufferManagerCommon::ShiftDepthForOffsetRendering(VirtualFramebuffer *vfb, int xOffset) {
+	if (!vfb->fbo || !vfb->fbo->HasDepthStencil()) {
+		return false;
 	}
 	const int scale = vfb->renderScaleFactor;
 	const int w = std::min(xOffset, (int)vfb->bufferWidth - xOffset) * scale;
 	const int h = vfb->renderHeight;
 	if (w <= 0) {
-		return;
+		return false;
 	}
 	Draw::Framebuffer *temp = GetTempFBO(TempFBO::DEPTH_SHIFT, vfb->renderWidth, vfb->renderHeight, vfb->fbo->MultiSampleLevel());
 	if (!temp) {
-		return;
+		return false;
 	}
+	// Rounding takes a draw, which can't take all the samples of a multisampled buffer.
+	const bool round = vfb->fbo->MultiSampleLevel() == 0 && draw_->GetDeviceCaps().textureDepthSupported && CanRoundDepth();
 	CopyDepthRect(vfb->fbo, 0, 0, temp, 0, 0, w, h, scale, "DepthShiftOut");
-	CopyDepthRect(temp, 0, 0, vfb->fbo, xOffset * scale, 0, w, h, scale, "DepthShiftIn");
+	if (round) {
+		BlitUsingRaster(temp, 0, 0, w, h, vfb->fbo, xOffset * scale, 0, xOffset * scale + w, h, false, scale, Get2DPipeline(DRAW2D_COPY_DEPTH_ROUND16), "DepthShiftInRound16");
+	} else {
+		CopyDepthRect(temp, 0, 0, vfb->fbo, xOffset * scale, 0, w, h, scale, "DepthShiftIn");
+	}
 	gpuStats.perFrame.numDepthCopies++;
 	draw_->Invalidate(InvalidationFlags::CACHED_RENDER_STATE);
 	RebindFramebuffer("After ShiftDepthForOffsetRendering");
 	gstate_c.Dirty(DIRTY_ALL_RENDER_STATE);
+	return round;
+}
+
+bool FramebufferManagerCommon::CanRoundDepth() const {
+	const Draw::DeviceCaps &caps = draw_->GetDeviceCaps();
+	// A 16-bit depth buffer rounds by itself, and PixelDepthRounding already rounds everything (its own way).
+	return useBufferedRendering_ && caps.fragmentShaderDepthWriteSupported && caps.preferredDepthBufferFormat != Draw::DataFormat::D16 &&
+		!gstate_c.Use(GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT);
+}
+
+// An EQUAL depth test against depth that the same geometry wrote in an earlier draw needs both draws to land on exactly
+// the same value. With the PSP's 16-bit depth they do, but at our precision the two can come out a hair apart, with
+// different shaders or batching, or drawn at a different X offset: Silent Hill: Origins lights its flashlight only
+// where the scene's depth is EQUAL, and missed scattered pixels (#16126). So once a buffer has had an EQUAL test, its
+// depth is rounded to 16 bits from its next depth clear on, so everything in it gets rounded the same way. Only those
+// buffers: writing depth from the shader costs the early depth test.
+void FramebufferManagerCommon::TrackEqualDepthTests(VirtualFramebuffer *vfb) {
+	if (!vfb) {
+		return;
+	}
+	if (gstate.isModeClear()) {
+		if ((vfb->usageFlags & (FB_USAGE_EQUAL_DEPTH | FB_USAGE_ROUND_DEPTH)) == FB_USAGE_EQUAL_DEPTH && gstate.isClearModeDepthMask()) {
+			vfb->usageFlags |= FB_USAGE_ROUND_DEPTH;
+			UpdateDepthRoundingForTarget();
+		}
+	} else if (gstate.isDepthTestEnabled()) {
+		const GEComparison func = gstate.getDepthTestFunction();
+		if (func == GE_COMP_EQUAL || func == GE_COMP_NOTEQUAL) {
+			vfb->usageFlags |= FB_USAGE_EQUAL_DEPTH;
+		}
+	}
+}
+
+// Whether draws to the current target round depth (FS_BIT_ROUND_DEPTH): a buffer that rounds (TrackEqualDepthTests), or
+// one drawn at an X offset against depth shifted over with rounding (ShiftDepthForOffsetRendering).
+void FramebufferManagerCommon::UpdateDepthRoundingForTarget() {
+	const bool roundsAtOffset = depthRoundedFor_ != 0 && depthRoundedFor_ == lastRenderAddress_ && gstate_c.curRTOffsetX > 0;
+	const bool round = roundsAtOffset || (currentRenderVfb_ && (currentRenderVfb_->usageFlags & FB_USAGE_ROUND_DEPTH) != 0 && CanRoundDepth());
+	if (round != gstate_c.roundDepthForTarget) {
+		gstate_c.roundDepthForTarget = round;
+		gstate_c.Dirty(DIRTY_FRAGMENTSHADER_STATE);
+	}
 }
 
 void FramebufferManagerCommon::NotifyRenderFramebufferCreated(VirtualFramebuffer *vfb) {
@@ -3776,6 +3836,7 @@ void FramebufferManagerCommon::ReleasePipelines() {
 	DoRelease(draw2DPipelineColorRect2Lin_);
 	DoRelease(draw2DPipelineColorSample0_);
 	DoRelease(draw2DPipelineCopyDepth_);
+	DoRelease(draw2DPipelineCopyDepthRound16_);
 	DoRelease(draw2DPipelineEncodeDepth_);
 	DoRelease(draw2DPipeline565ToDepth_);
 	DoRelease(draw2DPipeline565ToDepthDeswizzle_);
