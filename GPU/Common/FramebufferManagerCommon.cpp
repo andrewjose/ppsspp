@@ -1072,7 +1072,17 @@ void FramebufferManagerCommon::CopyDepthRect(Draw::Framebuffer *src, int srcX, i
 	const bool sameSamples = src->MultiSampleLevel() == dst->MultiSampleLevel();
 	// Only a copy takes all the samples, and blits of multisampled buffers aren't supported at all.
 	const bool multisampled = src->MultiSampleLevel() != 0 || dst->MultiSampleLevel() != 0;
-	if (sameSamples && (caps.framebufferSeparateDepthCopySupported || (!caps.framebufferDepthBlitSupported && caps.framebufferCopySupported) || (multisampled && caps.framebufferCopySupported))) {
+	// D3D11 can copy depth only as a whole surface: CopySubresourceRegion takes no box for depth-stencil, so
+	// D3D11DrawContext::CopyFramebufferImage skips a partial depth copy without a word. It's the backend that can
+	// draw depth but neither blit it nor copy it apart from stencil, so there, copy only whole surfaces and draw the
+	// rest, like BlitFramebufferDepth does. Otherwise Silent Hill: Origins' depth shift for its flashlight shadows
+	// (ShiftDepthForOffsetRendering, #16126) did nothing on D3D11.
+	const bool wholeSurface = srcX == 0 && srcY == 0 && dstX == 0 && dstY == 0 &&
+		w == src->Width() && h == src->Height() && w == dst->Width() && h == dst->Height();
+	const bool copiesOnlyWholeDepth = !caps.framebufferSeparateDepthCopySupported && !caps.framebufferDepthBlitSupported &&
+		caps.fragmentShaderDepthWriteSupported && caps.textureDepthSupported;
+	const bool canCopy = caps.framebufferCopySupported && (wholeSurface || !copiesOnlyWholeDepth);
+	if (sameSamples && canCopy && (caps.framebufferSeparateDepthCopySupported || !caps.framebufferDepthBlitSupported || multisampled)) {
 		draw_->CopyFramebufferImage(src, 0, srcX, srcY, 0, dst, 0, dstX, dstY, 0, w, h, 1, Draw::Aspect::DEPTH_BIT, tag);
 	} else if (multisampled) {
 		WARN_LOG_ONCE(depthRectMSAA, Log::FrameBuf, "Can't copy multisampled depth here (%s)", tag);
