@@ -605,6 +605,9 @@ public:
 
 	bool usingDepth;  // For deferred depth copies.
 	bool clearingDepth;
+	// Draws to the current render target round depth to 16 bits (FS_BIT_ROUND_DEPTH). Set by the framebuffer manager,
+	// see TrackEqualDepthTests and ShiftDepthForOffsetRendering.
+	bool roundDepthForTarget;
 
 	bool textureSolidAlpha;
 	bool vertexFullAlpha;

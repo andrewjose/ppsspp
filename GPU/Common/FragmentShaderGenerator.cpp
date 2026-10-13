@@ -194,8 +194,10 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 		return false;
 	}
 
-	bool needFragCoord = readFramebufferTex || gstate_c.Use(GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT) || shaderDepalMode == ShaderDepalMode::CLUT8;
-	bool writeDepth = (gstate_c.Use(GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT) || fsDepthClamp) && !forceDepthWritesOff && !id.Bit(FS_BIT_NO_DEPTH_WRITE);
+	// Rounding depth to 16 bits for the whole game (PixelDepthRounding), or just for this draw's target.
+	const bool roundDepth = gstate_c.Use(GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT) || id.Bit(FS_BIT_ROUND_DEPTH);
+	bool needFragCoord = readFramebufferTex || roundDepth || shaderDepalMode == ShaderDepalMode::CLUT8;
+	bool writeDepth = (roundDepth || fsDepthClamp) && !forceDepthWritesOff && !id.Bit(FS_BIT_NO_DEPTH_WRITE);
 
 	// TODO: We could have a separate mechanism to support more ops using the shader blending mechanism,
 // on hardware that can do proper bit math in fragment shaders.
@@ -1289,7 +1291,15 @@ bool GenerateFragmentShader(const FShaderID &id, char *buffer, const ShaderLangu
 	}
 
 	if (writeDepth) {
-		if (gstate_c.Use(GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT)) {
+		if (id.Bit(FS_BIT_ROUND_DEPTH)) {
+			// Z / 65536, the unrounded draws' scale, so rounding again (the depth shift's rounding copy, Draw2D's
+			// DRAW2D_COPY_DEPTH_ROUND16) gives the same value back. Must match that exactly.
+			if (fsDepthClamp) {
+				WRITE(p, "  gl_FragDepth = clamp(floor(projZ + 0.01), 0.0, 65535.0) / 65536.0;\n");
+			} else {
+				WRITE(p, "  gl_FragDepth = floor(gl_FragCoord.z * 65536.0 + 0.01) / 65536.0;\n");
+			}
+		} else if (roundDepth) {
 			if (fsDepthClamp) {
 				WRITE(p, "  gl_FragDepth = clamp(floor(projZ), 0.0, 65535.0) / 65535.0;\n");
 			} else {

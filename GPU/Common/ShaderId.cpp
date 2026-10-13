@@ -268,6 +268,7 @@ std::string FShaderID::Description(bool includeID) const {
 	if (Bit(FS_BIT_MINMAX_DISCARD)) desc.C("FragMinMaxDiscard ");
 	if (Bit(FS_BIT_DEPTH_CLAMP)) desc.C("FragDepthClamp ");
 	if (Bit(FS_BIT_NO_DEPTH_WRITE)) desc.C("NoDepthWrite ");
+	if (Bit(FS_BIT_ROUND_DEPTH)) desc.C("RoundDepth ");
 
 	const ShaderDepalMode depalMode = (ShaderDepalMode)Bits(FS_BIT_SHADER_DEPAL_MODE, 2);
 	switch (depalMode) {
@@ -323,6 +324,10 @@ void ComputeFragmentShaderID(FShaderID *id_out, const ComputedPipelineState &pip
 	if (gstate.isModeClear()) {
 		// We only need one clear shader, so let's ignore the rest of the bits.
 		id.SetBit(FS_BIT_CLEARMODE);
+		// Clear depth the same way it's drawn.
+		if (gstate_c.roundDepthForTarget && !gstate_c.Use(GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT) && gstate.isClearModeDepthMask()) {
+			id.SetBit(FS_BIT_ROUND_DEPTH);
+		}
 	} else {
 		bool lmode = gstate.isUsingSecondaryColor() && gstate.isLightingEnabled() && !isModeThrough;
 		bool enableFog = gstate.isFogEnabled() && !isModeThrough;
@@ -450,6 +455,10 @@ void ComputeFragmentShaderID(FShaderID *id_out, const ComputedPipelineState &pip
 		// once the shader writes gl_FragDepth (Tales of Phantasia, which has PixelDepthRounding).
 		if ((gstate_c.Use(GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT) || id.Bit(FS_BIT_DEPTH_CLAMP)) && IsDepthTestEffectivelyDisabled()) {
 			id.SetBit(FS_BIT_NO_DEPTH_WRITE);
+		}
+		// Rounds like the depth it tests against, see FramebufferManagerCommon::TrackEqualDepthTests. Only where depth is tested or written.
+		if (gstate_c.roundDepthForTarget && !gstate_c.Use(GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT) && !IsDepthTestEffectivelyDisabled()) {
+			id.SetBit(FS_BIT_ROUND_DEPTH);
 		}
 
 		// In case the USE flag changes (for example, in multisampling we might disable input attachments),
