@@ -122,6 +122,23 @@ Draw2DPipelineInfo GenerateDraw2DCopyDepthFs(ShaderWriter &writer) {
 	};
 }
 
+// Must round exactly like the fragment shader generator does for FS_BIT_ROUND_DEPTH, so the two meet an EQUAL test.
+Draw2DPipelineInfo GenerateDraw2DCopyDepthRound16Fs(ShaderWriter &writer) {
+	writer.SetFlags(ShaderWriterFlags::FS_WRITE_DEPTH);
+	writer.HighPrecisionFloat();
+	writer.DeclareSamplers(samplers);
+	writer.BeginFSMain(Slice<UniformDef>::empty(), varyings);
+	writer.C("  vec4 outColor = vec4(0.0, 0.0, 0.0, 0.0);\n");
+	writer.C("  gl_FragDepth = floor(").SampleTexture2D("tex", "v_texcoord.xy").C(".x * 65536.0 + 0.01) / 65536.0;\n");
+	writer.EndFSMain("outColor");
+
+	return Draw2DPipelineInfo{
+		"draw2d_copy_depth_round16",
+		RASTER_DEPTH,
+		RASTER_DEPTH,
+	};
+}
+
 Draw2DPipelineInfo GenerateDraw2DEncodeDepthFs(ShaderWriter &writer) {
 	writer.SetFlags(ShaderWriterFlags::FS_WRITE_DEPTH);
 	writer.HighPrecisionFloat();
@@ -414,6 +431,16 @@ Draw2DPipeline *FramebufferManagerCommon::Get2DPipeline(Draw2DShader shader) {
 			draw2DPipelineCopyDepth_ = draw2D_.Create2DPipeline(&GenerateDraw2DCopyDepthFs);
 		}
 		pipeline = draw2DPipelineCopyDepth_;
+		break;
+
+	case DRAW2D_COPY_DEPTH_ROUND16:
+		if (!draw_->GetDeviceCaps().fragmentShaderDepthWriteSupported) {
+			return nullptr;
+		}
+		if (!draw2DPipelineCopyDepthRound16_) {
+			draw2DPipelineCopyDepthRound16_ = draw2D_.Create2DPipeline(&GenerateDraw2DCopyDepthRound16Fs);
+		}
+		pipeline = draw2DPipelineCopyDepthRound16_;
 		break;
 
 	case DRAW2D_ENCODE_R16_TO_DEPTH:
