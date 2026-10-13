@@ -720,6 +720,7 @@ bool GPUCommonHW::GetCurrentTexture(GPUDebugBuffer &buffer, int level, bool *isF
 }
 
 void GPUCommonHW::CheckDepthUsage(VirtualFramebuffer *vfb) {
+	framebufferManager_->TrackEqualDepthTests(vfb);
 	if (!gstate_c.usingDepth) {
 		bool isReadingDepth = false;
 		bool isClearingDepth = false;

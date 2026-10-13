@@ -49,6 +49,8 @@ enum {
 	FB_USAGE_RENDER_DEPTH = 256,
 	FB_USAGE_COLOR_MIXED_DEPTH = 512,
 	FB_USAGE_INVALIDATE_DEPTH = 1024,  // used to clear depth buffers.
+	FB_USAGE_EQUAL_DEPTH = 2048,  // Has had a draw with an EQUAL or NOTEQUAL depth test.
+	FB_USAGE_ROUND_DEPTH = 4096,  // Draws round depth to 16 bits, see TrackEqualDepthTests.
 };
 
 enum {
@@ -508,6 +510,8 @@ public:
 		return msaaLevel_;
 	}
 
+	void TrackEqualDepthTests(VirtualFramebuffer *vfb);
+
 	void DiscardFramebufferCopy() {
 		currentFramebufferCopy_ = nullptr;
 	}
@@ -557,7 +561,9 @@ protected:
 
 	void BlitFramebufferDepth(VirtualFramebuffer *src, VirtualFramebuffer *dst, bool allowSizeMismatch = false);
 	void CopyDepthRect(Draw::Framebuffer *src, int srcX, int srcY, Draw::Framebuffer *dst, int dstX, int dstY, int w, int h, int scaleFactor, const char *tag);
-	void ShiftDepthForOffsetRendering(VirtualFramebuffer *vfb, int xOffset);
+	bool ShiftDepthForOffsetRendering(VirtualFramebuffer *vfb, int xOffset);
+	void UpdateDepthRoundingForTarget();
+	bool CanRoundDepth() const;
 	void EnsureStencilWritePipeline(bool useExportShader);
 	void DrawStencilWritePasses(GEBufferFormat format, int values, u8 usedBits, bool useExportShader);
 
@@ -655,6 +661,8 @@ protected:
 	std::unordered_map<u64, TempFBOInfo> tempFBOs_;
 	// The render target address the depth was last shifted for (see ShiftDepthForOffsetRendering).
 	u32 depthShiftedFor_ = 0;
+	// The same, when the shifted depth was rounded to 16 bits, so draws there round theirs too.
+	u32 depthRoundedFor_ = 0;
 	u32 lastRenderAddress_ = 0;
 
 	std::vector<Draw::Framebuffer *> fbosToDelete_;
@@ -686,6 +694,7 @@ protected:
 	Draw2DPipeline *draw2DPipelineColorRect2Lin_ = nullptr;
 	Draw2DPipeline *draw2DPipelineColorSample0_ = nullptr;
 	Draw2DPipeline *draw2DPipelineCopyDepth_ = nullptr;
+	Draw2DPipeline *draw2DPipelineCopyDepthRound16_ = nullptr;
 	Draw2DPipeline *draw2DPipelineEncodeDepth_ = nullptr;
 	Draw2DPipeline *draw2DPipeline565ToDepth_ = nullptr;
 	Draw2DPipeline *draw2DPipeline565ToDepthDeswizzle_ = nullptr;
