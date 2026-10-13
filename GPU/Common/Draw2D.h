@@ -21,11 +21,13 @@ enum Draw2DShader {
 	DRAW2D_565_TO_DEPTH_DESWIZZLE,
 	DRAW2D_COPY_COLOR_RECT2LIN,
 	DRAW2D_COPY_COLOR_SAMPLE0,  // From a multisampled framebuffer, its first sample instead of the average. Needs framebufferSampleReadSupported.
+	DRAW2D_COPY_DEPTH_ROUND16,  // Depth rounded to the PSP's 16 bits the way FS_BIT_ROUND_DEPTH rounds it.
 };
 
 inline RasterChannel Draw2DSourceChannel(Draw2DShader shader) {
 	switch (shader) {
 	case DRAW2D_COPY_DEPTH:
+	case DRAW2D_COPY_DEPTH_ROUND16:
 		return RASTER_DEPTH;
 	case DRAW2D_COPY_COLOR:
 	case DRAW2D_ENCODE_R16_TO_DEPTH:
