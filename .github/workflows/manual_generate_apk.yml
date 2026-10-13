@@ -15,6 +15,9 @@ on:
         - VRDebug
         - LegacyOptimized
 
+permissions:
+  contents: write
+
 jobs:
 
   apk:
@@ -55,11 +58,6 @@ jobs:
       #  with:
       #    ndk-version: r21e
 
-      - name: Test androidGitVersion
-        run: |
-          echo "count=${{steps.valid-tags.outputs.count}}"
-          gradle --quiet androidGitVersion
-      
       - name: Assemble APK
         run: ./gradlew assemble${{ github.event.inputs.buildVariant }} --stacktrace
       
@@ -79,3 +77,11 @@ jobs:
         with:
           name: android-${{ github.event.inputs.buildVariant }} build
           path: ppsspp/
+
+      # Test branches only: also publish the APK as a prerelease, which is easier to download than an artifact.
+      - name: Publish test prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="test-${GITHUB_REF_NAME//\//-}-run${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" ppsspp/*.apk --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title "$TAG" --notes "Test build of $GITHUB_REF_NAME at $GITHUB_SHA (${{ github.event.inputs.buildVariant }}). Not a release."
