@@ -19,7 +19,9 @@
 #include "Core/Config.h"
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
+#include "Core/Debugger/Breakpoints.h"
 #include "Core/Debugger/MemBlockInfo.h"
+#include "Core/ELF/ParamSFO.h"
 #include "Core/MemMap.h"
 #include "Core/Reporting.h"
 #include "Core/HLE/HLE.h"
@@ -803,6 +805,25 @@ void GPUCommon::PSPFrame() {
 		breakNext_ = GPUDebug::BreakNext::OP;
 	}
 	recorder_.NotifyBeginFrame();
+
+	// DIAGNOSTIC TEST BUILD ONLY: log CPU accesses to Silent Hill: Origins' frame and inventory picture memory
+	// (needs a CPU core using IR, which checks memory accesses at any address).
+	static GPUCommon *armedFor = nullptr;
+	if (armedFor != this && g_paramSFO.GetDiscID() == "ULUS10285") {
+		armedFor = this;
+		struct Range { u32 start, end; MemCheckCondition cond; };
+		static const Range ranges[] = {
+			{ 0x04090000, 0x04090800, MEMCHECK_READ },  // Scene buffer 0404c000/512 8888, row 136.
+			{ 0x04118000, 0x04118800, MEMCHECK_READ },  // Display buffer 040d4000/1024 565, row 136 (both halves).
+			{ 0x0913ee40, 0x0913f040, MEMCHECK_WRITE },  // Status picture 0913ce40/128 8888, row 32.
+			{ 0x04190000, 0x04190800, MEMCHECK_READWRITE },  // Item picture slots 04170000/512, row 64.
+			{ 0x041d0000, 0x041d0800, MEMCHECK_READWRITE },  // Item picture slots 04170000/512, row 192.
+		};
+		for (const Range &r : ranges) {
+			g_breakpoints.AddMemCheck(r.start, r.end, r.cond, BREAK_ACTION_LOG);
+		}
+		NOTICE_LOG(Log::G3D, "SHODIAG armed %d memory checks", (int)ARRAY_SIZE(ranges));
+	}
 }
 
 // Returns false on breakpoint.

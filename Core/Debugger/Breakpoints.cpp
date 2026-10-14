@@ -16,6 +16,7 @@
 // https://github.com/hrydgard/ppsspp and http://www.ppsspp.org/.
 
 #include <atomic>
+#include <map>
 
 #include "Common/System/System.h"
 #include "Common/Log.h"
@@ -26,6 +27,7 @@
 #include "Core/Debugger/MemBlockInfo.h"
 #include "Core/Debugger/SymbolMap.h"
 #include "Core/MemMap.h"
+#include "Core/MIPS/MIPS.h"
 #include "Core/MIPS/MIPSAnalyst.h"
 #include "Core/MIPS/MIPSDebugInterface.h"
 #include "Core/MIPS/JitCommon/JitCommon.h"
@@ -36,6 +38,23 @@ BreakpointManager g_breakpoints;
 void MemCheck::Log(u32 addr, bool write, int size, u32 pc, const char *reason) const {
 	if (action & BREAK_ACTION_LOG) {
 		const char *type = write ? "Write" : "Read";
+		// DIAGNOSTIC TEST BUILD ONLY: a few lines per PC, plus the function's hash for ReplaceTables.
+		static std::map<u32, int> hitsPerPc;
+		const int hits = ++hitsPerPc[pc];
+		if (hits > 8) {
+			return;
+		}
+		if (hits == 1) {
+			MIPSAnalyst::AnalyzedFunction func{};
+			MIPSAnalyst::AnalyzedFunction caller{};
+			const u32 ra = currentMIPS->r[MIPS_REG_RA];
+			const bool hasFunc = MIPSAnalyst::GetAnalyzedFunctionAt(pc, &func);
+			const bool hasCaller = MIPSAnalyst::GetAnalyzedFunctionAt(ra, &caller);
+			NOTICE_LOG(Log::MemMap, "SHODIAG CHKFUNC %s at %08x pc %08x: func %08x-%08x size %d hash %016llx%s | ra %08x: caller %08x size %d hash %016llx | a0 %08x a1 %08x a2 %08x a3 %08x",
+				type, addr, pc, hasFunc ? func.start : 0, hasFunc ? func.end : 0, hasFunc ? (int)func.size : 0, hasFunc ? (unsigned long long)func.hash : 0ULL, hasFunc && func.hasHash ? "" : " (no hash)",
+				ra, hasCaller ? caller.start : 0, hasCaller ? (int)caller.size : 0, hasCaller ? (unsigned long long)caller.hash : 0ULL,
+				currentMIPS->r[MIPS_REG_A0], currentMIPS->r[MIPS_REG_A1], currentMIPS->r[MIPS_REG_A2], currentMIPS->r[MIPS_REG_A3]);
+		}
 		if (logFormat.empty()) {
 			NOTICE_LOG(Log::MemMap, "CHK %s%i(%s) at %08x (%s), PC=%08x (%s)", type, size * 8, reason, addr, g_symbolMap->GetDescription(addr).c_str(), pc, g_symbolMap->GetDescription(pc).c_str());
 		} else {
