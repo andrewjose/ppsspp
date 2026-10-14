@@ -24,11 +24,18 @@
 #include <set>
 
 #include "Common/CommonTypes.h"
+#include "Common/Log.h"
 #include "GPU/Debugger/RecordFormat.h"
 
 class Path;
 
 namespace GPURecord {
+
+// DIAGNOSTIC TEST BUILD ONLY (Silent Hill: Origins inventory): while a frame dump records, log copies, transfers
+// and framebuffer choices. Never for a PR.
+extern bool g_diagActive;
+extern int g_diagLines;
+#define SHODIAG(...) do { if (GPURecord::g_diagActive && GPURecord::g_diagLines++ < 40000) { NOTICE_LOG(Log::G3D, "SHODIAG " __VA_ARGS__); } } while (0)
 
 constexpr uint32_t DIRTY_VRAM_SHIFT = 8;
 constexpr uint32_t DIRTY_VRAM_ROUND = (1 << DIRTY_VRAM_SHIFT) - 1;
