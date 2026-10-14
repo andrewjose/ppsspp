@@ -49,6 +49,13 @@
 
 namespace GPURecord {
 
+// DIAGNOSTIC TEST BUILD ONLY: record this many displayed frames per dump, and log while recording (SHODIAG).
+bool g_diagActive = false;
+int g_diagLines = 0;
+static constexpr int DIAG_FRAMES = 60;
+static int diagFrames = 0;
+static bool diagSawDisplay = false;
+
 // Appends data (or zeroes, for a null p) at a 4-byte aligned offset, zero padded: players read register blocks and headers as
 // words, which a PSP can't do unaligned.
 static u32 AppendToPushbuf(std::vector<u8> &pushbuf, const void *p, u32 sz) {
@@ -162,6 +169,11 @@ bool Recorder::BeginRecording() {
 
 	active = true;
 	guard.unlock();
+	g_diagActive = true;
+	g_diagLines = 0;
+	diagFrames = 0;
+	diagSawDisplay = false;
+	NOTICE_LOG(Log::G3D, "SHODIAG recording start, flip %d, recording %d frames", gpuStats.totals.numFlips, DIAG_FRAMES);
 	lastTextures.clear();
 	lastRenderTargets.clear();
 	readbackAddrs.clear();
@@ -730,6 +742,8 @@ void Recorder::FinishRecording() {
 		return;
 	}
 
+	NOTICE_LOG(Log::G3D, "SHODIAG recording end, flip %d, %d frames, %d log lines", gpuStats.totals.numFlips, diagFrames, g_diagLines);
+	g_diagActive = false;
 	Path filename = WriteRecording();
 	commands.clear();
 	pushbuf.clear();
@@ -920,7 +934,13 @@ void Recorder::NotifyDisplay(u32 framebuf, int stride, int fmt) {
 		}
 	}
 
+	diagSawDisplay = true;
 	if (writePending) {
+		// DIAGNOSTIC TEST BUILD ONLY: keep going for DIAG_FRAMES displayed frames.
+		SHODIAG("display %08x, flip %d, frame %d", framebuf, gpuStats.totals.numFlips, diagFrames + 1);
+		if (++diagFrames < DIAG_FRAMES) {
+			return;
+		}
 		NOTICE_LOG(Log::System, "Recording complete on display");
 		FinishRecording();
 	}
@@ -945,7 +965,7 @@ void Recorder::PushDisplay(u32 framebuf, int stride, int fmt) {
 void Recorder::NotifyBeginFrame() {
 	const bool noDisplayAction = flipLastAction + 4 < gpuStats.totals.numFlips;
 	// We do this only to catch things that don't call NotifyDisplay.
-	if (active && HasDrawCommands() && (noDisplayAction || gpuStats.totals.numFlips == flipFinishAt)) {
+	if (active && !diagSawDisplay && HasDrawCommands() && (noDisplayAction || gpuStats.totals.numFlips == flipFinishAt)) {
 		NOTICE_LOG(Log::System, "Recording complete on frame");
 
 		CheckEdramTrans();
