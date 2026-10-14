@@ -1006,6 +1006,17 @@ static bool GetBestFramebufferCandidate(FramebufferManagerCommon *fbManager, con
 		}
 	}
 
+	if (GPURecord::g_diagActive && (candidates.size() != 0 || Memory::IsVRAMAddress(entry.addr))) {
+		std::string cands;
+		for (size_t i = 0; i < candidates.size(); i++) {
+			const AttachCandidate &c = candidates[i];
+			cands += StringFromFormat(" [%08x/%d %s %s off %d,%d seq %d/%d size %dx%d drawn %dx%d]", c.fb->fb_address, c.fb->fb_stride, GeBufferFormatToString(c.fb->fb_format),
+				c.channel == RASTER_COLOR ? "color" : "depth", c.match.xOffset, c.match.yOffset, c.fb->colorBindSeq, c.fb->depthBindSeq, c.fb->width, c.fb->height, c.fb->drawnWidth, c.fb->drawnHeight);
+		}
+		SHODIAG("f%d tex %08x/%d %dx%d %s off %d (%s): %d cands%s", gpuStats.totals.numFlips, entry.addr, entry.bufw, dimWidth(entry.dim), dimHeight(entry.dim),
+			GeTextureFormatToString(entry.format), texAddrOffset, context, (int)candidates.size(), cands.c_str());
+	}
+
 	if (candidates.size() == 0) {
 		return false;
 	} else if (candidates.size() == 1) {
@@ -1080,6 +1091,7 @@ static bool GetBestFramebufferCandidate(FramebufferManagerCommon *fbManager, con
 	}
 
 	if (bestIndex != -1) {
+		SHODIAG("f%d  tex %08x chose candidate %d (%08x)", gpuStats.totals.numFlips, entry.addr, (int)bestIndex, candidates[bestIndex].fb->fb_address);
 		if (logging) {
 			WARN_LOG(Log::TexCache, "Chose candidate %d:\n%s", (int)bestIndex, candidates[bestIndex].ToString().c_str());
 		}

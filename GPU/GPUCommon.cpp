@@ -2047,6 +2047,7 @@ void GPUCommon::DoBlockTransfer(u32 skipDrawReason) {
 	int bpp = gstate.getTransferBpp();
 
 	DEBUG_LOG(Log::G3D, "Block transfer: %08x/%x -> %08x/%x, %ix%ix%i (%i,%i)->(%i,%i)", srcBasePtr, srcStride, dstBasePtr, dstStride, width, height, bpp, srcX, srcY, dstX, dstY);
+	SHODIAG("f%d blocktransfer %08x/%d (%d,%d) -> %08x/%d (%d,%d) %dx%d bpp %d", gpuStats.totals.numFlips, srcBasePtr, srcStride, srcX, srcY, dstBasePtr, dstStride, dstX, dstY, width, height, bpp);
 	gpuStats.perFrame.numBlockTransfers++;
 
 	// For VRAM, we wrap around when outside valid memory (mirrors still work.)
@@ -2256,6 +2257,7 @@ void GPUCommon::NotifyVideoCopy(u32 dest, u32 src, int size) {
 }
 
 bool GPUCommon::PerformMemoryCopy(u32 dest, u32 src, int size, GPUCopyFlag flags) {
+	SHODIAG("f%d memcpy %08x <- %08x size %d flags %x", gpuStats.totals.numFlips, dest, src, size, (int)flags);
 	if (size == 0) {
 		_dbg_assert_msg_(false, "Zero-sized PerformMemoryCopy: %08x -> %08x, size %d (flag: %d)", src, dest, size, (int)flags);
 		return false;
@@ -2302,6 +2304,7 @@ bool GPUCommon::PerformMemoryCopy(u32 dest, u32 src, int size, GPUCopyFlag flags
 }
 
 bool GPUCommon::PerformMemorySet(u32 dest, u8 v, int size) {
+	SHODIAG("f%d memset %08x = %02x size %d", gpuStats.totals.numFlips, dest, v, size);
 	if (size == 0) {
 		_dbg_assert_msg_(false, "Zero-sized PerformMemorySet: %08x, value %02x, size %d", dest, v, size);
 		return false;

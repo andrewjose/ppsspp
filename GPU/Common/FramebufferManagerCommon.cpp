@@ -37,6 +37,7 @@
 #include "GPU/Common/PresentationCommon.h"
 #include "GPU/Common/TextureCacheCommon.h"
 #include "GPU/Common/ReinterpretFramebuffer.h"
+#include "GPU/Debugger/Record.h"
 #include "GPU/GPUCommon.h"
 #include "GPU/GPUState.h"
 
@@ -619,6 +620,10 @@ VirtualFramebuffer *FramebufferManagerCommon::DoSetRenderFrameBuffer(Framebuffer
 	gstate_c.curRTRenderWidth = vfb->renderWidth;
 	gstate_c.curRTRenderHeight = vfb->renderHeight;
 	UpdateDepthRoundingForTarget();
+	SHODIAG("f%d render target %08x/%d %s z %08x -> vfb %08x/%d %s %dx%d buffer %dx%d drawn %dx%d offset %d,%d", gpuStats.totals.numFlips,
+		params.fb_address, params.fb_stride, GeBufferFormatToString(params.fb_format), params.z_address,
+		vfb->fb_address, vfb->fb_stride, GeBufferFormatToString(vfb->fb_format), vfb->width, vfb->height, vfb->bufferWidth, vfb->bufferHeight,
+		vfb->drawnWidth, vfb->drawnHeight, gstate_c.curRTOffsetX, gstate_c.curRTOffsetY);
 	return vfb;
 }
 
@@ -2348,6 +2353,8 @@ bool FramebufferManagerCommon::NotifyFramebufferCopy(u32 src, u32 dst, int size,
 		dstY = bestDst->y;
 		dstH = bestDst->h;
 	}
+	SHODIAG("f%d  copy %08x <- %08x size %d: src vfb %08x y %d h %d (%d cands), dst vfb %08x y %d h %d (%d cands)", gpuStats.totals.numFlips, dst, src, size,
+		srcBuffer ? srcBuffer->fb_address : 0, srcY, srcH, (int)srcCandidates.size(), dstBuffer ? dstBuffer->fb_address : 0, dstY, dstH, (int)dstCandidates.size());
 
 	if (srcCandidates.size() > 1) {
 		if (Reporting::ShouldLogNTimes("mulblock", 5)) {
@@ -2626,6 +2633,7 @@ bool FramebufferManagerCommon::FindTransferFramebuffer(u32 basePtr, int stride_p
 
 VirtualFramebuffer *FramebufferManagerCommon::CreateRAMFramebuffer(uint32_t fbAddress, int width, int height, int stride, GEBufferFormat format) {
 	INFO_LOG(Log::FrameBuf, "Creating RAM framebuffer at %08x (%dx%d, stride %d, fb_format %d)", fbAddress, width, height, stride, format);
+	SHODIAG("f%d create RAM framebuffer %08x %dx%d stride %d fmt %d", gpuStats.totals.numFlips, fbAddress, width, height, stride, (int)format);
 
 	RasterChannel channel = format == GE_FORMAT_DEPTH16 ? RASTER_DEPTH : RASTER_COLOR;
 
@@ -2846,6 +2854,7 @@ bool FramebufferManagerCommon::NotifyBlockTransferBefore(u32 dstBasePtr, int dst
 	// These modify the X/Y/W/H parameters depending on the memory offset of the base pointers from the actual buffers.
 	bool srcBuffer = FindTransferFramebuffer(srcBasePtr, srcStride, srcX, srcY, width, height, bpp, false, &srcRect);
 	bool dstBuffer = FindTransferFramebuffer(dstBasePtr, dstStride, dstX, dstY, width, height, bpp, true, &dstRect);
+	SHODIAG("f%d  transfer match: src %s, dst %s", gpuStats.totals.numFlips, srcBuffer ? srcRect.ToString().c_str() : "none", dstBuffer ? dstRect.ToString().c_str() : "none");
 
 	if (srcRect.channel == RASTER_DEPTH) {
 		// Ignore the found buffer if it's not 16-bit - we create a new more suitable one instead.
