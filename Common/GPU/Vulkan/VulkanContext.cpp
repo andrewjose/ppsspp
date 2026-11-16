@@ -789,6 +789,9 @@ VkResult VulkanContext::CreateDevice(int physical_device, const std::vector<cons
 		// Enable the EXT extension instead if available, it's equivalent (was promoted).
 		extensionsLookup_.KHR_present_mode_fifo_latest_ready = EnableDeviceExtension(VK_EXT_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME, 0);
 	}
+	extensionsLookup_.KHR_vulkan_memory_model = EnableDeviceExtension(VK_KHR_VULKAN_MEMORY_MODEL_EXTENSION_NAME, VK_API_VERSION_1_2);
+	extensionsLookup_.EXT_robustness2 = EnableDeviceExtension(VK_EXT_ROBUSTNESS_2_EXTENSION_NAME, 0);
+	extensionsLookup_.KHR_shader_float16_int8 = EnableDeviceExtension(VK_KHR_SHADER_FLOAT16_INT8_EXTENSION_NAME, VK_API_VERSION_1_2);
 
 	// Optional features
 	if (extensionsLookup_.KHR_get_physical_device_properties2 && vkGetPhysicalDeviceFeatures2) {
@@ -801,6 +804,9 @@ VkResult VulkanContext::CreateDevice(int physical_device, const std::vector<cons
 		VkPhysicalDevicePresentModeFifoLatestReadyFeaturesKHR presentModeFifoProps{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PRESENT_MODE_FIFO_LATEST_READY_FEATURES_KHR};
 		VkPhysicalDeviceScalarBlockLayoutFeatures scalarBlockLayoutFeatures = {VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SCALAR_BLOCK_LAYOUT_FEATURES};
 		VkPhysicalDevicePortabilitySubsetFeaturesKHR portabilitySubsetFeatures{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PORTABILITY_SUBSET_FEATURES_KHR };
+		VkPhysicalDeviceVulkanMemoryModelFeatures vulkanMemoryModelFeatures{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_MEMORY_MODEL_FEATURES };
+		VkPhysicalDeviceRobustness2FeaturesEXT robustness2Features{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT };
+		VkPhysicalDeviceShaderFloat16Int8Features float16Int8Features{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES };
 
 		ChainStruct(features2, &multiViewFeatures);
 		if (extensionsLookup_.KHR_present_wait) {
@@ -820,6 +826,15 @@ VkResult VulkanContext::CreateDevice(int physical_device, const std::vector<cons
 		}
 		if (extensionsLookup_.KHR_portability_subset) {
 			ChainStruct(features2, &portabilitySubsetFeatures);
+		}
+		if (extensionsLookup_.KHR_vulkan_memory_model) {
+			ChainStruct(features2, &vulkanMemoryModelFeatures);
+		}
+		if (extensionsLookup_.EXT_robustness2) {
+			ChainStruct(features2, &robustness2Features);
+		}
+		if (extensionsLookup_.KHR_shader_float16_int8) {
+			ChainStruct(features2, &float16Int8Features);
 		}
 		vkGetPhysicalDeviceFeatures2(physical_devices_[physical_device_], &features2);
 		deviceFeatures_.available.standard = features2.features;
@@ -841,6 +856,15 @@ VkResult VulkanContext::CreateDevice(int physical_device, const std::vector<cons
 		}
 		if (extensionsLookup_.KHR_portability_subset) {
 			deviceFeatures_.available.portabilitySubset = portabilitySubsetFeatures;
+		}
+		if (extensionsLookup_.KHR_vulkan_memory_model) {
+			deviceFeatures_.available.vulkanMemoryModel = vulkanMemoryModelFeatures;
+		}
+		if (extensionsLookup_.EXT_robustness2) {
+			deviceFeatures_.available.robustness2 = robustness2Features;
+		}
+		if (extensionsLookup_.KHR_shader_float16_int8) {
+			deviceFeatures_.available.float16Int8 = float16Int8Features;
 		}
 	} else {
 		vkGetPhysicalDeviceFeatures(physical_devices_[physical_device_], &deviceFeatures_.available.standard);
@@ -908,6 +932,20 @@ VkResult VulkanContext::CreateDevice(int physical_device, const std::vector<cons
 		deviceFeatures_.enabled.portabilitySubset.pNext = nullptr;
 	}
 
+	// Frame generation. Only these bits: nothing else in these structs (like robustBufferAccess2) is turned on.
+	deviceFeatures_.enabled.vulkanMemoryModel = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_MEMORY_MODEL_FEATURES };
+	if (extensionsLookup_.KHR_vulkan_memory_model) {
+		deviceFeatures_.enabled.vulkanMemoryModel.vulkanMemoryModel = deviceFeatures_.available.vulkanMemoryModel.vulkanMemoryModel;
+	}
+	deviceFeatures_.enabled.robustness2 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT };
+	if (extensionsLookup_.EXT_robustness2) {
+		deviceFeatures_.enabled.robustness2.nullDescriptor = deviceFeatures_.available.robustness2.nullDescriptor;
+	}
+	deviceFeatures_.enabled.float16Int8 = { VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES };
+	if (extensionsLookup_.KHR_shader_float16_int8) {
+		deviceFeatures_.enabled.float16Int8.shaderFloat16 = deviceFeatures_.available.float16Int8.shaderFloat16;
+	}
+
 	// deviceFeatures_.enabled.multiview.multiviewGeometryShader = deviceFeatures_.available.multiview.multiviewGeometryShader;
 
 	VkPhysicalDeviceFeatures2 features2{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2 };
@@ -941,6 +979,15 @@ VkResult VulkanContext::CreateDevice(int physical_device, const std::vector<cons
 		}
 		if (extensionsLookup_.KHR_portability_subset) {
 			ChainStruct(features2, &deviceFeatures_.enabled.portabilitySubset);
+		}
+		if (extensionsLookup_.KHR_vulkan_memory_model) {
+			ChainStruct(features2, &deviceFeatures_.enabled.vulkanMemoryModel);
+		}
+		if (extensionsLookup_.EXT_robustness2) {
+			ChainStruct(features2, &deviceFeatures_.enabled.robustness2);
+		}
+		if (extensionsLookup_.KHR_shader_float16_int8) {
+			ChainStruct(features2, &deviceFeatures_.enabled.float16Int8);
 		}
 	} else {
 		device_info.pEnabledFeatures = &deviceFeatures_.enabled.standard;
