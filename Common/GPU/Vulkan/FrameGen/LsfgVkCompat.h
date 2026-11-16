@@ -54,7 +54,9 @@ namespace Vulkan
 		/// starts and released only when it stops — and the stop path idles the device first —
 		/// so immediate destruction is safe. If any of these ever become per-frame, they must
 		/// move to the deferred path instead.
-		template <typename T>
+		/// Tag is what tells the kinds apart: on 32-bit targets every non-dispatchable handle is the
+		/// same uint64_t, so Handle<VkImageView> and Handle<VkSampler> would be one type.
+		template <typename T, typename Tag>
 		class Handle
 		{
 		public:
@@ -67,8 +69,8 @@ namespace Vulkan
 			Handle(const Handle&) = delete;
 			Handle& operator=(const Handle&) = delete;
 			Handle(Handle&& o) noexcept
-				: m_device(std::exchange(o.m_device, VK_NULL_HANDLE))
-				, m_handle(std::exchange(o.m_handle, VK_NULL_HANDLE))
+				: m_device(std::exchange(o.m_device, {}))
+				, m_handle(std::exchange(o.m_handle, {}))
 			{
 			}
 			Handle& operator=(Handle&& o) noexcept
@@ -76,8 +78,8 @@ namespace Vulkan
 				if (this != &o)
 				{
 					Destroy();
-					m_device = std::exchange(o.m_device, VK_NULL_HANDLE);
-					m_handle = std::exchange(o.m_handle, VK_NULL_HANDLE);
+					m_device = std::exchange(o.m_device, {});
+					m_handle = std::exchange(o.m_handle, {});
 				}
 				return *this;
 			}
@@ -93,13 +95,20 @@ namespace Vulkan
 			T m_handle = VK_NULL_HANDLE;
 		};
 
-		using ImageView = Handle<VkImageView>;
-		using Sampler = Handle<VkSampler>;
-		using ShaderModule = Handle<VkShaderModule>;
-		using DescriptorSetLayout = Handle<VkDescriptorSetLayout>;
-		using PipelineLayout = Handle<VkPipelineLayout>;
-		using Pipeline = Handle<VkPipeline>;
-		using DescriptorPool = Handle<VkDescriptorPool>;
+		struct ImageViewTag;
+		using ImageView = Handle<VkImageView, ImageViewTag>;
+		struct SamplerTag;
+		using Sampler = Handle<VkSampler, SamplerTag>;
+		struct ShaderModuleTag;
+		using ShaderModule = Handle<VkShaderModule, ShaderModuleTag>;
+		struct DescriptorSetLayoutTag;
+		using DescriptorSetLayout = Handle<VkDescriptorSetLayout, DescriptorSetLayoutTag>;
+		struct PipelineLayoutTag;
+		using PipelineLayout = Handle<VkPipelineLayout, PipelineLayoutTag>;
+		struct PipelineTag;
+		using Pipeline = Handle<VkPipeline, PipelineTag>;
+		struct DescriptorPoolTag;
+		using DescriptorPool = Handle<VkDescriptorPool, DescriptorPoolTag>;
 
 		/// VMA-backed image. Separate from Handle because it carries an allocation.
 		class Image
