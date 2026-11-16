@@ -65,6 +65,10 @@
 #include "GPU/Common/PostShader.h"
 #include "GPU/Debugger/Record.h"
 
+#ifdef PPSSPP_HAS_FRAMEGEN
+#include "Common/GPU/Vulkan/FrameGen/FrameGenTypes.h"
+#endif
+
 struct FrameBufferState {
 	u32 topaddr;
 	GEBufferFormat fmt;
@@ -898,6 +902,10 @@ void __DisplayFlip(int cyclesLate) {
 			gpu->SetCurFramebufferDirty(fbReallyDirty);
 			if (fbReallyDirty) {
 				DisplayFireActualFlip();
+#ifdef PPSSPP_HAS_FRAMEGEN
+				// A new game frame: frame generation interpolates up to this one.
+				g_frameGenContentCounter.fetch_add(1, std::memory_order_relaxed);
+#endif
 			}
 		}
 	}

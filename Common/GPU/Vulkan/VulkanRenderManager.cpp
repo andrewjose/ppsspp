@@ -16,6 +16,10 @@
 #include "Common/LogReporting.h"
 #include "Common/Thread/ThreadUtil.h"
 
+#ifdef PPSSPP_HAS_FRAMEGEN
+#include "Common/GPU/Vulkan/FrameGen/VulkanFrameGen.h"
+#endif
+
 #if 0 // def _DEBUG
 #define VLOG(...) NOTICE_LOG(Log::G3D, __VA_ARGS__)
 #else
@@ -544,6 +548,11 @@ void VulkanRenderManager::StopThreads() {
 void VulkanRenderManager::DestroyBackbuffers() {
 	StopThreads();
 	vulkan_->WaitUntilQueueIdle();
+
+#ifdef PPSSPP_HAS_FRAMEGEN
+	// It holds the swapchain's images, and the render thread that uses it is stopped.
+	VulkanFrameGen::Shutdown();
+#endif
 
 	for (auto &image : frameDataShared_.swapchainImages_) {
 		vulkan_->Delete().QueueDeleteImageView(image.view);
@@ -1889,6 +1898,10 @@ void VulkanRenderManager::Present() {
 	if (VulkanPresentation *presentation = vulkan_->GetPresentation()) {
 		presentation->BeginPresent();
 	}
+
+#ifdef PPSSPP_HAS_FRAMEGEN
+	frameData_[curFrame].frameGenContentId = g_frameGenContentCounter.load(std::memory_order_relaxed);
+#endif
 
 	VKRRenderThreadTask *task = new VKRRenderThreadTask(VKRRunType::PRESENT);
 	task->frame = curFrame;

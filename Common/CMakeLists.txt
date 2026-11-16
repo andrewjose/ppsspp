@@ -45,6 +45,48 @@ if(APPLE AND NOT LIBRETRO)
 	set_source_files_properties(GPU/Metal/MetalGraphicsContext.mm GPU/Metal/MetalRenderManager.mm GPU/Metal/thin3d_metal.mm PROPERTIES COMPILE_FLAGS -fobjc-arc)
 endif()
 
+if(FRAMEGEN)
+	set(CommonFrameGen
+		GPU/Vulkan/FrameGen/FrameGen.cpp
+		GPU/Vulkan/FrameGen/FrameGen.h
+		GPU/Vulkan/FrameGen/FrameGenHost.cpp
+		GPU/Vulkan/FrameGen/FrameGenPacer.cpp
+		GPU/Vulkan/FrameGen/FrameGenPacer.h
+		GPU/Vulkan/FrameGen/FrameGenStatus.h
+		GPU/Vulkan/FrameGen/FrameGenTypes.h
+		GPU/Vulkan/FrameGen/LosslessDll.cpp
+		GPU/Vulkan/FrameGen/LosslessDll.h
+		GPU/Vulkan/FrameGen/LsfgAlpha.cpp
+		GPU/Vulkan/FrameGen/LsfgAlpha.h
+		GPU/Vulkan/FrameGen/LsfgBeta.cpp
+		GPU/Vulkan/FrameGen/LsfgBeta.h
+		GPU/Vulkan/FrameGen/LsfgChain.cpp
+		GPU/Vulkan/FrameGen/LsfgChain.h
+		GPU/Vulkan/FrameGen/LsfgCommon.cpp
+		GPU/Vulkan/FrameGen/LsfgCommon.h
+		GPU/Vulkan/FrameGen/LsfgDelta.cpp
+		GPU/Vulkan/FrameGen/LsfgDelta.h
+		GPU/Vulkan/FrameGen/LsfgGamma.cpp
+		GPU/Vulkan/FrameGen/LsfgGamma.h
+		GPU/Vulkan/FrameGen/LsfgGenerate.cpp
+		GPU/Vulkan/FrameGen/LsfgGenerate.h
+		GPU/Vulkan/FrameGen/LsfgMipmaps.cpp
+		GPU/Vulkan/FrameGen/LsfgMipmaps.h
+		GPU/Vulkan/FrameGen/LsfgShaders.cpp
+		GPU/Vulkan/FrameGen/LsfgShaders.h
+		GPU/Vulkan/FrameGen/LsfgTranslate.cpp
+		GPU/Vulkan/FrameGen/LsfgTranslate.h
+		GPU/Vulkan/FrameGen/LsfgUtil.cpp
+		GPU/Vulkan/FrameGen/LsfgUtil.h
+		GPU/Vulkan/FrameGen/LsfgVkCompat.cpp
+		GPU/Vulkan/FrameGen/LsfgVkCompat.h
+		GPU/Vulkan/FrameGen/VulkanFrameGen.cpp
+		GPU/Vulkan/FrameGen/VulkanFrameGen.h
+	)
+	# The ported passes use C++20 (std::span, ranges, designated initializers).
+	set_source_files_properties(GPU/Vulkan/FrameGen/FrameGen.cpp GPU/Vulkan/FrameGen/FrameGenHost.cpp GPU/Vulkan/FrameGen/FrameGenPacer.cpp GPU/Vulkan/FrameGen/LosslessDll.cpp GPU/Vulkan/FrameGen/LsfgAlpha.cpp GPU/Vulkan/FrameGen/LsfgBeta.cpp GPU/Vulkan/FrameGen/LsfgChain.cpp GPU/Vulkan/FrameGen/LsfgCommon.cpp GPU/Vulkan/FrameGen/LsfgDelta.cpp GPU/Vulkan/FrameGen/LsfgGamma.cpp GPU/Vulkan/FrameGen/LsfgGenerate.cpp GPU/Vulkan/FrameGen/LsfgMipmaps.cpp GPU/Vulkan/FrameGen/LsfgShaders.cpp GPU/Vulkan/FrameGen/LsfgTranslate.cpp GPU/Vulkan/FrameGen/LsfgUtil.cpp GPU/Vulkan/FrameGen/LsfgVkCompat.cpp GPU/Vulkan/FrameGen/VulkanFrameGen.cpp PROPERTIES COMPILE_OPTIONS -std=c++20)
+endif()
+
 set(CommonVR
 	VR/OpenXRLoader.cpp
 	VR/OpenXRLoader.h
@@ -92,6 +134,7 @@ add_library(Common STATIC
 	${CommonD3D}
 	${CommonMetal}
 	${CommonVR}
+	${CommonFrameGen}
 	Serialize/Serializer.cpp
 	Serialize/Serializer.h
 	Serialize/SerializeDeque.h

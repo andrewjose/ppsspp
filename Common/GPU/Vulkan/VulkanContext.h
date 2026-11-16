@@ -411,6 +411,11 @@ public:
 	VkSwapchainKHR GetSwapchain() const { return swapchain_; }
 	VkFormat GetSwapchainFormat() const { return presentation_ ? presentation_->GetFormat() : swapchainFormat_; }
 	bool IsSwapchainInited() const { return swapchainInited_; }
+	// Bumped every time the swapchain is (re)created, so holders of per-swapchain state can tell it changed.
+	uint32_t GetSwapchainGeneration() const { return swapchainGeneration_; }
+	VkImageUsageFlags GetSwapchainImageUsage() const { return swapchainImageUsage_; }
+	// The extra images the swapchain was built with for frame generation (0 if it wasn't).
+	uint32_t GetSwapchainFrameGenImages() const { return swapchainFrameGenImages_; }
 	// True when we chose a pre-transform that doesn't match the surface's current one (we refuse 270
 	// degrees, see InitSwapchain). The driver then reports VK_SUBOPTIMAL_KHR on every present, which
 	// is not a reason to recreate the swapchain - we'd just get the same answer again, forever.
@@ -596,6 +601,9 @@ private:
 
 	VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
 	VkFormat swapchainFormat_ = VK_FORMAT_UNDEFINED;
+	uint32_t swapchainGeneration_ = 0;
+	VkImageUsageFlags swapchainImageUsage_ = 0;
+	uint32_t swapchainFrameGenImages_ = 0;
 
 	// When set, replaces the real-swapchain path above. See VulkanPresentation.h.
 	std::unique_ptr<VulkanPresentation> presentation_;

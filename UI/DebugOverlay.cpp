@@ -33,6 +33,9 @@
 
 #include "UI/DevScreens.h"
 #include "UI/DebugOverlay.h"
+#ifdef PPSSPP_HAS_FRAMEGEN
+#include "Common/GPU/Vulkan/FrameGen/FrameGenStatus.h"
+#endif
 
 // For std::max
 #include <algorithm>
@@ -584,6 +587,15 @@ void DrawFPS(UIContext *ctx, const Bounds &bounds) {
 			}
 		}
 	}
+#ifdef PPSSPP_HAS_FRAMEGEN
+	// The FPS counter is the game's, which frame generation doesn't change. This shows what reaches the display.
+	if (g_Config.iShowStatusFlags & (int)ShowStatusFlags::FPS_COUNTER) {
+		const std::string frameGen = VulkanFrameGen::GetStatusText();
+		if (!frameGen.empty()) {
+			w.F(" %s", frameGen.c_str());
+		}
+	}
+#endif
 
 	ctx->Flush();
 

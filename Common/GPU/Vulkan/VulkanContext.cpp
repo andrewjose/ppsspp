@@ -17,6 +17,10 @@
 #include "Common/File/FileUtil.h"
 #include "ext/xxhash.h"
 
+#ifdef PPSSPP_HAS_FRAMEGEN
+#include "Common/GPU/Vulkan/FrameGen/VulkanFrameGen.h"
+#endif
+
 #ifdef USE_CRT_DBG
 #undef new
 #endif
@@ -1657,6 +1661,16 @@ bool VulkanContext::InitSwapchain(VkPresentModeKHR desiredPresentMode) {
 	// own only 1 image at a time, besides the images being displayed and
 	// queued for display):
 	uint32_t desiredNumberOfSwapChainImages = surfCapabilities_.minImageCount + 1;
+	swapchainFrameGenImages_ = 0;
+#ifdef PPSSPP_HAS_FRAMEGEN
+	if (VulkanFrameGen::Wanted()) {
+		// Generated frames are presented in between the real ones, so they need a queue (FIFO, which
+		// is always available: MAILBOX and IMMEDIATE would drop them), and an image each to hold.
+		swapchainPresentMode = VK_PRESENT_MODE_FIFO_KHR;
+		swapchainFrameGenImages_ = VulkanFrameGen::ExtraSwapchainImages();
+		desiredNumberOfSwapChainImages += swapchainFrameGenImages_;
+	}
+#endif
 	if ((surfCapabilities_.maxImageCount > 0) &&
 		(desiredNumberOfSwapChainImages > surfCapabilities_.maxImageCount)) {
 		// Application must settle for fewer images than desired:
@@ -1761,6 +1775,11 @@ bool VulkanContext::InitSwapchain(VkPresentModeKHR desiredPresentMode) {
 	if (surfCapabilities_.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) {
 		swap_chain_info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 	}
+	// Frame generation copies its frames into swapchain images.
+	if (swapchainFrameGenImages_ && (surfCapabilities_.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
+		swap_chain_info.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+	}
+	swapchainImageUsage_ = swap_chain_info.imageUsage;
 
 	swap_chain_info.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	swap_chain_info.queueFamilyIndexCount = 0;
@@ -1793,6 +1812,7 @@ bool VulkanContext::InitSwapchain(VkPresentModeKHR desiredPresentMode) {
 	}
 	INFO_LOG(Log::G3D, "Created swapchain: %dx%d %s", swap_chain_info.imageExtent.width, swap_chain_info.imageExtent.height, (surfCapabilities_.supportedUsageFlags & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) ? "(TRANSFER_SRC_BIT supported)" : "");
 	swapchainInited_ = true;
+	swapchainGeneration_++;
 
 	if (oldSwapchain != VK_NULL_HANDLE) {
 		vkDestroySwapchainKHR(device_, oldSwapchain, nullptr);

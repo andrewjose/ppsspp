@@ -128,6 +128,9 @@
 #include "Core/Util/AudioFormat.h"
 #include "Core/Util/RecentFiles.h"
 #include "Core/Util/PathUtil.h"
+#ifdef PPSSPP_HAS_FRAMEGEN
+#include "Common/GPU/Vulkan/FrameGen/FrameGenTypes.h"
+#endif
 #include "Core/WebServer.h"
 #include "Core/TiltEventProcessor.h"
 
@@ -1036,6 +1039,31 @@ void NativeClearAchievementsHostOverride() {
 bool CreateGlobalPipelines();
 
 // TODO: Add faster special case for channels == 2.
+#ifdef PPSSPP_HAS_FRAMEGEN
+int g_frameGenDllGeneration = 0;
+
+// Hands the frame generation settings to the render thread (which only takes them if they changed).
+static void PostFrameGenConfig() {
+	static std::string cacheDir;
+	if (cacheDir.empty()) {
+		const Path dir = GetSysDirectory(DIRECTORY_APP_CACHE) / "lsfg";
+		File::CreateFullPath(dir);
+		cacheDir = dir.ToString();
+	}
+	LsfgConfig config;
+	config.LsfgEnabled = g_Config.bFrameGen && GetGPUBackend() == GPUBackend::VULKAN;
+	config.LsfgMultiplier = (u32)std::clamp(g_Config.iFrameGenMultiplier, 2, 4);
+	config.LsfgFlowScale = (u8)std::clamp(g_Config.iFrameGenFlowScale, 25, 100);
+	config.LsfgPerformance = g_Config.bFrameGenPerformance;
+	config.LsfgFp16 = g_Config.bFrameGenFp16;
+	config.LsfgDllPath = g_Config.sFrameGenDllPath;
+	config.LsfgDllGeneration = (u32)g_frameGenDllGeneration;
+	config.CacheDir = cacheDir;
+	config.BuildId = PPSSPP_GIT_VERSION;
+	LsfgPostConfig(config);
+}
+#endif
+
 static void NativeMixWrapper(float *dest, int framesToWrite, int sampleRateHz, void *userdata) {
 	static std::vector<int16_t> buffer;
 	if ((int)buffer.size() < framesToWrite * 2) {
@@ -1442,6 +1470,10 @@ void NativeFrame(GraphicsContext *graphicsContext) {
 	}
 
 	g_requestManager.ProcessRequests();
+
+#ifdef PPSSPP_HAS_FRAMEGEN
+	PostFrameGenConfig();
+#endif
 
 	// Guards the span where we actually touch CPU-thread-owned debugger state (breakpoints,
 	// symbol map, registers, memory, etc.) against unsynchronized reads from other threads' paint

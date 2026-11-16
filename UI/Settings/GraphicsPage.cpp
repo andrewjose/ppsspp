@@ -22,6 +22,13 @@
 
 #include "Common/BitSet.h"
 #include "Common/Data/Text/I18n.h"
+#include "Common/File/FileUtil.h"
+#include "Common/File/Path.h"
+#include "Common/System/OSD.h"
+#include "Common/System/Request.h"
+#ifdef PPSSPP_HAS_FRAMEGEN
+#include "Common/GPU/Vulkan/FrameGen/FrameGenStatus.h"
+#endif
 #include "Common/GPU/thin3d.h"
 #include "Common/System/Display.h"
 #include "Common/System/NativeApp.h"
@@ -92,6 +99,91 @@ static void OnRenderingDevice(SettingsPageHost *host) {
 		});
 	}
 }
+
+#ifdef PPSSPP_HAS_FRAMEGEN
+extern int g_frameGenDllGeneration;  // NativeApp.cpp
+
+// Copies the picked Lossless.dll into our own storage (the pick can be a content URI that goes away)
+// and checks it has the shaders. Returns an error, or empty on success.
+static std::string ImportLosslessDll(std::string_view picked) {
+	std::string data;
+	if (!File::ReadBinaryFileToString(Path(picked), &data) || data.empty()) {
+		return "Couldn't read the file";
+	}
+	const Path dest = GetSysDirectory(DIRECTORY_SYSTEM) / "Lossless.dll";
+	const Path temp = GetSysDirectory(DIRECTORY_SYSTEM) / "Lossless.dll.tmp";
+	if (!File::WriteDataToFile(false, data.data(), data.size(), temp)) {
+		return "Couldn't copy the file";
+	}
+	std::string error = VulkanFrameGen::ValidateDll(temp.ToString());
+	if (!error.empty()) {
+		File::Delete(temp, true);
+		return error;
+	}
+	File::Delete(dest, true);
+	if (!File::Rename(temp, dest)) {
+		File::Delete(temp, true);
+		return "Couldn't copy the file";
+	}
+	g_Config.sFrameGenDllPath = dest.ToString();
+	g_frameGenDllGeneration++;
+	return {};
+}
+
+static void BuildFrameGenPage(SettingsPage *page) {
+	SettingsPageHost *host = page->Host();
+
+	page->Description({I18NCat::GRAPHICS, "FrameGenDescription",
+		"Lossless Scaling's frame generation shows extra frames in between the game's, for smoother motion. "
+		"It doesn't make the game run faster, and it adds a little input lag. Best with a 30 fps game on a 60 Hz screen, "
+		"or a 60 fps game on a 120 Hz screen. Needs your own copy of Lossless Scaling: import its Lossless.dll below. "
+		"Vulkan only, made for Adreno 7xx and newer GPUs."});
+
+	page->Header();
+	std::string dllStatus = "Not imported";
+	if (!g_Config.sFrameGenDllPath.empty()) {
+		dllStatus = VulkanFrameGen::ValidateDll(g_Config.sFrameGenDllPath);
+		if (dllStatus.empty()) {
+			dllStatus = "OK";
+		}
+	}
+	page->Info({I18NCat::GRAPHICS, "Lossless.dll"}, dllStatus);
+	if (System_GetPropertyBool(SYSPROP_HAS_FILE_BROWSER)) {
+		page->Choice({I18NCat::GRAPHICS, "Import Lossless.dll..."}).OnClick([host](UI::EventParams &e) {
+			System_BrowseForFile(host->PageRequesterToken(), "Lossless.dll", BrowseFileType::ANY, [host](std::string_view value, int) {
+				const std::string error = ImportLosslessDll(value);
+				if (error.empty()) {
+					g_OSD.Show(OSDType::MESSAGE_SUCCESS, "Lossless.dll imported");
+				} else {
+					g_OSD.Show(OSDType::MESSAGE_ERROR, "Lossless.dll: " + error);
+				}
+				host->RecreatePageViews();
+			});
+		});
+	} else {
+		page->Info({I18NCat::GRAPHICS, "Put Lossless.dll in PSP/SYSTEM"}, "");
+	}
+
+	page->Header();
+	page->Setting(&g_Config.bFrameGen).EnabledFunc([] {
+		return !g_Config.sFrameGenDllPath.empty();
+	});
+	page->Setting(&g_Config.iFrameGenMultiplier).Enabled(&g_Config.bFrameGen)
+		.Hint({I18NCat::GRAPHICS, "FrameGenMultiplierHint", "The game's frame rate times this should match your screen's refresh rate, like 30 fps x2 on a 60 Hz screen."});
+	page->Setting(&g_Config.bFrameGenPerformance).Enabled(&g_Config.bFrameGen)
+		.Hint({I18NCat::GRAPHICS, "FrameGenPerformanceHint", "Lighter shaders. Recommended on phones and handhelds."});
+	page->Setting(&g_Config.iFrameGenFlowScale).Enabled(&g_Config.bFrameGen)
+		.Hint({I18NCat::GRAPHICS, "FrameGenFlowScaleHint", "Lower is faster, with less accurate motion."});
+	page->Setting(&g_Config.bFrameGenFp16).Enabled(&g_Config.bFrameGen)
+		.Hint({I18NCat::GRAPHICS, "FrameGenFp16Hint", "Faster where the GPU supports it."});
+
+	const std::string status = VulkanFrameGen::GetStatusText();
+	if (!status.empty()) {
+		page->Header();
+		page->Info({I18NCat::GRAPHICS, "Status"}, status);
+	}
+}
+#endif
 
 static void BuildSpeedHacksPage(SettingsPage *page) {
 	using namespace UI;
@@ -309,6 +401,11 @@ void BuildGraphicsSettings(SettingsPage *page) {
 	page->Setting(&g_Config.bRenderDuplicateFrames).EnabledFunc([] {
 		return !g_Config.bSkipBufferEffects && g_Config.iFrameSkip == 0;
 	}).Hint({I18NCat::GRAPHICS, "RenderDuplicateFrames Tip", "Can make framerate smoother in games that run at lower framerates"});
+#ifdef PPSSPP_HAS_FRAMEGEN
+	if (GetGPUBackend() == GPUBackend::VULKAN) {
+		page->Link({I18NCat::GRAPHICS, "Frame generation (Lossless Scaling)"}, I18NCat::GRAPHICS, &BuildFrameGenPage);
+	}
+#endif
 
 	page->Header("Frame Rate Control");
 

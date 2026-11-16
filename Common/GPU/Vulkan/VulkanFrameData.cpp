@@ -4,6 +4,10 @@
 #include "Common/Log.h"
 #include "Common/StringUtils.h"
 
+#ifdef PPSSPP_HAS_FRAMEGEN
+#include "Common/GPU/Vulkan/FrameGen/VulkanFrameGen.h"
+#endif
+
 #if 0 // def _DEBUG
 #define VLOG(...) NOTICE_LOG(Log::G3D, __VA_ARGS__)
 #else
@@ -146,6 +150,20 @@ VkResult FrameData::QueuePresent(VulkanContext *vulkan, FrameDataShared &shared)
 			presentGOOGLE.swapchainCount = 1;
 		}
 	}
+
+#ifdef PPSSPP_HAS_FRAMEGEN
+	if (VulkanFrameGen::Wanted() && shared.swapchainImageCount_ <= VulkanFrameGen::MAX_SWAPCHAIN_IMAGES) {
+		VkImage images[VulkanFrameGen::MAX_SWAPCHAIN_IMAGES];
+		for (uint32_t i = 0; i < shared.swapchainImageCount_; i++) {
+			images[i] = shared.swapchainImages_[i].image;
+		}
+		VkResult res = VK_SUCCESS;
+		if (VulkanFrameGen::PresentWithGeneration(vulkan, images, shared.swapchainImageCount_, curSwapchainImage,
+				shared.swapchainImages_[curSwapchainImage].renderingCompleteSemaphore, frameGenContentId, present.pNext, &res)) {
+			return res;
+		}
+	}
+#endif
 
 	return vkQueuePresentKHR(vulkan->GetGraphicsQueue(), &present);
 }

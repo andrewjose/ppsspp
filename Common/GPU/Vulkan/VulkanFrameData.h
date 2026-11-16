@@ -154,6 +154,9 @@ struct FrameData {
 	// Frames need unique IDs to wait for present on, let's keep them here.
 	// Also used for indexing into the frame timing history buffer.
 	uint64_t frameId = 0;
+	// For frame generation: the count of new game frames when this frame was finished. A present
+	// with the same count as the previous one shows nothing new and isn't interpolated.
+	uint32_t frameGenContentId = 0;
 
 	// Profiling.
 	QueueProfileContext profile{};

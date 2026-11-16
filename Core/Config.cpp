@@ -905,6 +905,7 @@ static constexpr const char *depthRasterModeNames[] = { "Auto", "Low", "Off", "A
 static constexpr const char *frameRateLimit30Names[] = { "Auto", "Always", "Off" };
 static constexpr const char *bloomHackNames[] = { "Off", "Safe", "Balanced", "Aggressive" };
 static constexpr const char *inflightFramesNames[] = { "No buffer", "Up to 1", "Up to 2" };
+static constexpr const char *frameGenMultiplierNames[] = { "2x", "3x", "4x" };
 static constexpr const char *texScalingTypeNames[] = { "xBRZ", "Hybrid", "Bicubic", "Hybrid + Bicubic" };
 #ifndef MOBILE_DEVICE
 static constexpr const char *texScalingLevelNames[] = { "Off", "2x", "3x", "4x", "5x" };
@@ -1047,6 +1048,17 @@ static constexpr ConfigSetting graphicsSettings[] = {
 		.Label(I18NCat::GRAPHICS, "Buffer graphics commands").Choices(inflightFramesNames, 1),
 	ConfigSetting("RenderDuplicateFrames", SETTING(g_Config, bRenderDuplicateFrames), false, CfgFlag::PER_GAME)
 		.Label(I18NCat::GRAPHICS, "Render duplicate frames to 60hz"),
+	ConfigSetting("FrameGen", SETTING(g_Config, bFrameGen), false, CfgFlag::PER_GAME)
+		.Label(I18NCat::GRAPHICS, "Frame generation", "Frame generation"),
+	ConfigSetting("FrameGenMultiplier", SETTING(g_Config, iFrameGenMultiplier), 2, CfgFlag::PER_GAME)
+		.Label(I18NCat::GRAPHICS, "Frame generation multiplier", "Frames shown per game frame").Choices(frameGenMultiplierNames, 2),
+	ConfigSetting("FrameGenPerformance", SETTING(g_Config, bFrameGenPerformance), true, CfgFlag::PER_GAME)
+		.Label(I18NCat::GRAPHICS, "Frame generation performance mode", "Performance mode"),
+	ConfigSetting("FrameGenFlowScale", SETTING(g_Config, iFrameGenFlowScale), 100, CfgFlag::PER_GAME)
+		.Label(I18NCat::GRAPHICS, "Frame generation motion detail", "Motion detail").Range(25, 100, 5).Units("%"),
+	ConfigSetting("FrameGenFp16", SETTING(g_Config, bFrameGenFp16), false, CfgFlag::PER_GAME)
+		.Label(I18NCat::GRAPHICS, "Frame generation half precision", "Half-precision shaders"),
+	ConfigSetting("FrameGenDllPath", SETTING(g_Config, sFrameGenDllPath), "", CfgFlag::DEFAULT),
 	ConfigSetting("LimitFrameRateTo30", SETTING(g_Config, iLimitFrameRateTo30), (int)FrameRateLimit30::AUTO, CfgFlag::PER_GAME | CfgFlag::REPORT)
 		.Label(I18NCat::GRAPHICS, "Limit framerate to 30 fps").Choices(frameRateLimit30Names),
 
