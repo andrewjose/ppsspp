@@ -12,6 +12,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -37,12 +38,27 @@ struct LsfgConfig {
 	bool LsfgPerformance = true;
 	bool LsfgFp16 = false;
 	u32 LsfgTargetRate = 0;     // output Hz the pacer aims for, 0 = fixed multiplier
-	std::string LsfgDllPath;    // the user's Lossless.dll (may be a content:// URI on Android)
+	std::string LsfgDllPath;    // the user's Lossless.dll, copied into our own storage
+	u32 LsfgDllGeneration = 0;  // bumped when a DLL is imported over the same path
 	std::string CacheDir;       // where the extracted SPIR-V is cached
 	std::string BuildId;        // the cache is invalidated when this changes
 };
 
+// The render thread's copy, which the pass code reads. Only LsfgSyncConfig writes it.
 extern LsfgConfig g_lsfgConfig;
+
+// Hands new settings to the render thread, if they changed. Any thread.
+void LsfgPostConfig(const LsfgConfig &config);
+// The settings last posted, which the render thread may not have picked up yet. Any thread.
+LsfgConfig LsfgPendingConfig();
+// Render thread: takes the posted settings into g_lsfgConfig.
+void LsfgSyncConfig();
+// From the posted settings: interpolated frames per real one, 0 when frame generation is off.
+extern std::atomic<uint32_t> g_frameGenPendingExtraImages;
+
+// Counts new game frames (see sceDisplay). Each present carries the value it had when the frame
+// was finished, and one that repeats the previous value isn't interpolated.
+extern std::atomic<uint32_t> g_frameGenContentCounter;
 
 // printf-style logging for the ported code, in the G3D log channel.
 struct LsfgConsoleLog {

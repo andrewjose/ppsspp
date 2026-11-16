@@ -433,6 +433,13 @@ public:
 	bool bGfxDebugOutput;
 	int iInflightFrames;
 	bool bRenderDuplicateFrames;
+	// Frame generation (Lossless Scaling's, from the user's own Lossless.dll). Vulkan only.
+	bool bFrameGen;
+	int iFrameGenMultiplier;  // frames displayed per game frame, 2-4
+	bool bFrameGenPerformance;
+	int iFrameGenFlowScale;  // percent
+	bool bFrameGenFp16;
+	std::string sFrameGenDllPath;  // our copy of the user's Lossless.dll
 	int iLimitFrameRateTo30;  // FrameRateLimit30
 	bool bRenderMultiThreading;
 

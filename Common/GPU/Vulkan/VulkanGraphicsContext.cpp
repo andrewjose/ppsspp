@@ -67,6 +67,10 @@
 #include "Common/StringUtils.h"
 #include "GPU/Vulkan/VulkanUtil.h"
 
+#ifdef PPSSPP_HAS_FRAMEGEN
+#include "Common/GPU/Vulkan/FrameGen/VulkanFrameGen.h"
+#endif
+
 #ifdef _DEBUG
 static const bool g_validate_ = true;
 #else
@@ -359,6 +363,13 @@ void VulkanGraphicsContext::Poll() {
 		Resize();
 		windowRestored_ = false;
 	}
+#ifdef PPSSPP_HAS_FRAMEGEN
+	// Frame generation turned on or off, or its multiplier changed: it needs a swapchain built for it.
+	else if (vulkan_->IsSwapchainInited() && !vulkan_->GetPresentation() &&
+		vulkan_->GetSwapchainFrameGenImages() != VulkanFrameGen::ExtraSwapchainImages()) {
+		Resize();
+	}
+#endif
 }
 
 void *VulkanGraphicsContext::GetAPIContext() {
