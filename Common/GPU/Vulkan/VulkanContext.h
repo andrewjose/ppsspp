@@ -322,6 +322,10 @@ public:
 		VkPhysicalDevicePresentModeFifoLatestReadyFeaturesKHR presentModeFifoProps;
 		VkPhysicalDeviceScalarBlockLayoutFeatures scalarBlockLayout;
 		VkPhysicalDevicePortabilitySubsetFeaturesKHR portabilitySubset;
+		// Frame generation needs these (FrameGen/LsfgShaders.cpp).
+		VkPhysicalDeviceVulkanMemoryModelFeatures vulkanMemoryModel;
+		VkPhysicalDeviceRobustness2FeaturesEXT robustness2;
+		VkPhysicalDeviceShaderFloat16Int8Features float16Int8;
 	};
 
 	const PhysicalDeviceProps &GetPhysicalDeviceProperties(int i = -1) const {

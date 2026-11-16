@@ -277,6 +277,10 @@ struct VulkanExtensions {
 	bool KHR_present_mode_fifo_latest_ready;
 	bool EXT_scalar_block_layout;
 	bool EXT_full_screen_exclusive;
+	// For frame generation (FrameGen/). Only the features below are enabled, nothing that changes behavior.
+	bool KHR_vulkan_memory_model;
+	bool EXT_robustness2;
+	bool KHR_shader_float16_int8;
 	// bool EXT_depth_range_unrestricted;  // Allows depth outside [0.0, 1.0] in 32-bit float depth buffers.
 };
 
