@@ -15,49 +15,49 @@ namespace Vulkan
 		// vkDestroy* entry points are PPSSPP's loader globals, so a template specialisation costs
 		// nothing at runtime and keeps Handle<> a two-pointer object.
 		template <>
-		void Handle<VkImageView>::Destroy()
+		void Handle<VkImageView, ImageViewTag>::Destroy()
 		{
 			if (m_handle != VK_NULL_HANDLE)
 				vkDestroyImageView(m_device, m_handle, nullptr);
 			m_handle = VK_NULL_HANDLE;
 		}
 		template <>
-		void Handle<VkSampler>::Destroy()
+		void Handle<VkSampler, SamplerTag>::Destroy()
 		{
 			if (m_handle != VK_NULL_HANDLE)
 				vkDestroySampler(m_device, m_handle, nullptr);
 			m_handle = VK_NULL_HANDLE;
 		}
 		template <>
-		void Handle<VkShaderModule>::Destroy()
+		void Handle<VkShaderModule, ShaderModuleTag>::Destroy()
 		{
 			if (m_handle != VK_NULL_HANDLE)
 				vkDestroyShaderModule(m_device, m_handle, nullptr);
 			m_handle = VK_NULL_HANDLE;
 		}
 		template <>
-		void Handle<VkDescriptorSetLayout>::Destroy()
+		void Handle<VkDescriptorSetLayout, DescriptorSetLayoutTag>::Destroy()
 		{
 			if (m_handle != VK_NULL_HANDLE)
 				vkDestroyDescriptorSetLayout(m_device, m_handle, nullptr);
 			m_handle = VK_NULL_HANDLE;
 		}
 		template <>
-		void Handle<VkPipelineLayout>::Destroy()
+		void Handle<VkPipelineLayout, PipelineLayoutTag>::Destroy()
 		{
 			if (m_handle != VK_NULL_HANDLE)
 				vkDestroyPipelineLayout(m_device, m_handle, nullptr);
 			m_handle = VK_NULL_HANDLE;
 		}
 		template <>
-		void Handle<VkPipeline>::Destroy()
+		void Handle<VkPipeline, PipelineTag>::Destroy()
 		{
 			if (m_handle != VK_NULL_HANDLE)
 				vkDestroyPipeline(m_device, m_handle, nullptr);
 			m_handle = VK_NULL_HANDLE;
 		}
 		template <>
-		void Handle<VkDescriptorPool>::Destroy()
+		void Handle<VkDescriptorPool, DescriptorPoolTag>::Destroy()
 		{
 			if (m_handle != VK_NULL_HANDLE)
 				vkDestroyDescriptorPool(m_device, m_handle, nullptr);
@@ -73,9 +73,9 @@ namespace Vulkan
 		{
 		}
 		Image::Image(Image&& o) noexcept
-			: m_allocator(std::exchange(o.m_allocator, VK_NULL_HANDLE))
-			, m_image(std::exchange(o.m_image, VK_NULL_HANDLE))
-			, m_allocation(std::exchange(o.m_allocation, VK_NULL_HANDLE))
+			: m_allocator(std::exchange(o.m_allocator, {}))
+			, m_image(std::exchange(o.m_image, {}))
+			, m_allocation(std::exchange(o.m_allocation, {}))
 		{
 		}
 		Image& Image::operator=(Image&& o) noexcept
@@ -83,9 +83,9 @@ namespace Vulkan
 			if (this != &o)
 			{
 				Destroy();
-				m_allocator = std::exchange(o.m_allocator, VK_NULL_HANDLE);
-				m_image = std::exchange(o.m_image, VK_NULL_HANDLE);
-				m_allocation = std::exchange(o.m_allocation, VK_NULL_HANDLE);
+				m_allocator = std::exchange(o.m_allocator, {});
+				m_image = std::exchange(o.m_image, {});
+				m_allocation = std::exchange(o.m_allocation, {});
 			}
 			return *this;
 		}
@@ -109,9 +109,9 @@ namespace Vulkan
 		{
 		}
 		Buffer::Buffer(Buffer&& o) noexcept
-			: m_allocator(std::exchange(o.m_allocator, VK_NULL_HANDLE))
-			, m_buffer(std::exchange(o.m_buffer, VK_NULL_HANDLE))
-			, m_allocation(std::exchange(o.m_allocation, VK_NULL_HANDLE))
+			: m_allocator(std::exchange(o.m_allocator, {}))
+			, m_buffer(std::exchange(o.m_buffer, {}))
+			, m_allocation(std::exchange(o.m_allocation, {}))
 			, m_mapped(std::exchange(o.m_mapped, nullptr))
 			, m_size(std::exchange(o.m_size, 0))
 		{
@@ -121,9 +121,9 @@ namespace Vulkan
 			if (this != &o)
 			{
 				Destroy();
-				m_allocator = std::exchange(o.m_allocator, VK_NULL_HANDLE);
-				m_buffer = std::exchange(o.m_buffer, VK_NULL_HANDLE);
-				m_allocation = std::exchange(o.m_allocation, VK_NULL_HANDLE);
+				m_allocator = std::exchange(o.m_allocator, {});
+				m_buffer = std::exchange(o.m_buffer, {});
+				m_allocation = std::exchange(o.m_allocation, {});
 				m_mapped = std::exchange(o.m_mapped, nullptr);
 				m_size = std::exchange(o.m_size, 0);
 			}
