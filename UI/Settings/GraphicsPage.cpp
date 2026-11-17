@@ -140,6 +140,11 @@ static void BuildFrameGenPage(SettingsPage *page) {
 		"Vulkan only, made for Adreno 7xx and newer GPUs."});
 
 	page->Header();
+	// Without a file picker (desktop), the file is just put there.
+	const Path systemDll = GetSysDirectory(DIRECTORY_SYSTEM) / "Lossless.dll";
+	if (g_Config.sFrameGenDllPath.empty() && File::Exists(systemDll)) {
+		g_Config.sFrameGenDllPath = systemDll.ToString();
+	}
 	std::string dllStatus = "Not imported";
 	if (!g_Config.sFrameGenDllPath.empty()) {
 		dllStatus = VulkanFrameGen::ValidateDll(g_Config.sFrameGenDllPath);
@@ -161,7 +166,7 @@ static void BuildFrameGenPage(SettingsPage *page) {
 			});
 		});
 	} else {
-		page->Info({I18NCat::GRAPHICS, "Put Lossless.dll in PSP/SYSTEM"}, "");
+		page->Info({I18NCat::GRAPHICS, "Put Lossless.dll in PSP/SYSTEM, then reopen this page"}, "");
 	}
 
 	page->Header();
@@ -405,7 +410,7 @@ void BuildGraphicsSettings(SettingsPage *page) {
 	}).Hint({I18NCat::GRAPHICS, "RenderDuplicateFrames Tip", "Can make framerate smoother in games that run at lower framerates"});
 #ifdef PPSSPP_HAS_FRAMEGEN
 	if (GetGPUBackend() == GPUBackend::VULKAN) {
-		page->Link({I18NCat::GRAPHICS, "Frame generation (Lossless Scaling)"}, I18NCat::GRAPHICS, &BuildFrameGenPage);
+		page->Link({I18NCat::GRAPHICS, "Frame generation"}, I18NCat::GRAPHICS, &BuildFrameGenPage);
 	}
 #endif
 

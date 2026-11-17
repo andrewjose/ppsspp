@@ -14,7 +14,7 @@ The guessing is done by Lossless Scaling, a paid Windows app. PPSSPP doesn't inc
 import the `Lossless.dll` file from your own copy, and PPSSPP reads the frame generation shaders out
 of it. Without that file the option stays off.
 
-To use it: Settings > Graphics > Frame generation (Lossless Scaling) > Import Lossless.dll, then
+To use it: Settings > Graphics > Frame generation > Import Lossless.dll, then
 turn on Frame generation and pick a multiplier. With the FPS counter on, the overlay shows how many
 frames per second actually reach the screen. It needs the Vulkan backend, and it's made for Adreno 7xx
 and newer GPUs (Snapdragon 8 Gen 2 class phones and handhelds).
