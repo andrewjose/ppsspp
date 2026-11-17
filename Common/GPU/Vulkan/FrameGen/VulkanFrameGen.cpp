@@ -499,9 +499,13 @@ bool PresentWithGeneration(VulkanContext *vulkan, const VkImage *swapchainImages
 		NoteFramesDisplayed(1, 0);
 		return false;
 	}
-	if (UpdatePassthrough(s_multiplier)) {
-		NoteFramesDisplayed(1, 0);
-		return false;
+	if (g_lsfgConfig.LsfgAutoPause) {
+		if (UpdatePassthrough(s_multiplier)) {
+			NoteFramesDisplayed(1, 0);
+			return false;
+		}
+	} else if (s_passthrough.load(std::memory_order_relaxed)) {
+		ResetRate();
 	}
 
 	const VkImage real_image = swapchainImages[realIndex];

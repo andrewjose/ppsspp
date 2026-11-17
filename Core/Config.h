@@ -439,6 +439,7 @@ public:
 	bool bFrameGenPerformance;
 	int iFrameGenFlowScale;  // percent
 	bool bFrameGenFp16;
+	bool bFrameGenAutoPause;  // pass frames through when the game is too fast for the screen
 	std::string sFrameGenDllPath;  // our copy of the user's Lossless.dll
 	int iLimitFrameRateTo30;  // FrameRateLimit30
 	bool bRenderMultiThreading;

@@ -1838,9 +1838,20 @@ static void RenderLoopThread(ANativeWindow *wnd, GraphicsContext *graphicsContex
 	renderer_inited = true;
 	// The frame callback runs on the emu thread, which with OpenGL isn't this one.
 	PerformanceHintSession perfHint;
-	const auto frame = [&perfHint](GraphicsContext *graphicsContext) {
+	// Java asks for 60 Hz when the surface is created. Frame generation needs the screen to show
+	// its frames too, so it asks for the multiple (Android picks the nearest mode the panel has).
+	int requestedFrameRate = 60;
+	const auto frame = [&perfHint, &requestedFrameRate](GraphicsContext *graphicsContext) {
 		ApplyPendingResize();
 		NativeFrame(graphicsContext);
+#ifdef PPSSPP_HAS_FRAMEGEN
+		const int wantedFrameRate = g_Config.bFrameGen && !g_Config.sFrameGenDllPath.empty() && GetGPUBackend() == GPUBackend::VULKAN
+			? 60 * std::clamp(g_Config.iFrameGenMultiplier, 2, 4) : 60;
+		if (wantedFrameRate != requestedFrameRate) {
+			requestedFrameRate = wantedFrameRate;
+			PushCommand("set_frame_rate", StringFromFormat("%d", wantedFrameRate));
+		}
+#endif
 		ProcessFrameCommands();
 		perfHint.ReportFrame();
 		return !exitRenderLoop;
