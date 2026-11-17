@@ -408,6 +408,7 @@ VirtualFramebuffer *FramebufferManagerCommon::DoSetRenderFrameBuffer(Framebuffer
 	if (params.fb_address != lastRenderAddress_) {
 		lastRenderAddress_ = params.fb_address;
 		depthShiftedFor_ = 0;
+		depthRoundedFor_ = 0;
 		// Moving to an X offset can keep the same framebuffer, and the depth handling has to run again for it.
 		gstate_c.usingDepth = false;
 	}
@@ -635,6 +636,7 @@ VirtualFramebuffer *FramebufferManagerCommon::DoSetRenderFrameBuffer(Framebuffer
 	gstate_c.curRTHeight = vfb->bufferHeight;
 	gstate_c.curRTRenderWidth = vfb->renderWidth;
 	gstate_c.curRTRenderHeight = vfb->renderHeight;
+	UpdateDepthRoundingForTarget();
 	return vfb;
 }
 
@@ -680,7 +682,10 @@ void FramebufferManagerCommon::SetDepthFrameBuffer(bool isClearingDepth) {
 	if (!isClearingDepth && useBufferedRendering_ && gstate_c.curRTOffsetX > 0 && depthShiftedFor_ != lastRenderAddress_ &&
 		sameDepthBuffer) {
 		depthShiftedFor_ = lastRenderAddress_;
-		ShiftDepthForOffsetRendering(currentRenderVfb_, gstate_c.curRTOffsetX);
+		if (ShiftDepthForOffsetRendering(currentRenderVfb_, gstate_c.curRTOffsetX)) {
+			depthRoundedFor_ = lastRenderAddress_;
+		}
+		UpdateDepthRoundingForTarget();
 	}
 
 	// If this first draw call is anything other than a clear, "resolve" the depth buffer,
@@ -1088,26 +1093,81 @@ void FramebufferManagerCommon::CopyDepthRect(Draw::Framebuffer *src, int srcX, i
 }
 
 // Copies the depth at x in [0, xOffset) to [xOffset, 2 * xOffset), through a temporary buffer.
-void FramebufferManagerCommon::ShiftDepthForOffsetRendering(VirtualFramebuffer *vfb, int xOffset) {
-	if (!vfb->fbo) {
-		return;
+//
+// The pass at the offset then draws the same geometry the scene pass drew at the unshifted position, but somewhere else
+// in the buffer, and the GPU doesn't give it exactly the same depth there: the window coordinates go through different
+// float math, and some GPUs interpolate depth from the buffer's origin. Off by a hair, an EQUAL test fails on scattered
+// pixels, which Silent Hill: Origins shows as black specks in its flashlight (#16126). On the PSP both passes hit the
+// same 16-bit values, so where we can, the copy rounds depth to those, and the pass's draws round theirs the same way
+// (FS_BIT_ROUND_DEPTH), as PixelDepthRounding does for a whole game. Returns whether it rounded.
+bool FramebufferManagerCommon::ShiftDepthForOffsetRendering(VirtualFramebuffer *vfb, int xOffset) {
+	if (!vfb->fbo || !vfb->fbo->HasDepthStencil()) {
+		return false;
 	}
 	const int scale = vfb->renderScaleFactor;
 	const int w = std::min(xOffset, (int)vfb->bufferWidth - xOffset) * scale;
 	const int h = vfb->renderHeight;
 	if (w <= 0) {
-		return;
+		return false;
 	}
 	Draw::Framebuffer *temp = GetTempFBO(TempFBO::DEPTH_SHIFT, vfb->renderWidth, vfb->renderHeight, vfb->fbo->MultiSampleLevel());
 	if (!temp) {
-		return;
+		return false;
 	}
+	// Rounding takes a draw, which can't take all the samples of a multisampled buffer.
+	const bool round = vfb->fbo->MultiSampleLevel() == 0 && draw_->GetDeviceCaps().textureDepthSupported && CanRoundDepth();
 	CopyDepthRect(vfb->fbo, 0, 0, temp, 0, 0, w, h, scale, "DepthShiftOut");
-	CopyDepthRect(temp, 0, 0, vfb->fbo, xOffset * scale, 0, w, h, scale, "DepthShiftIn");
+	if (round) {
+		BlitUsingRaster(temp, 0, 0, w, h, vfb->fbo, xOffset * scale, 0, xOffset * scale + w, h, false, scale, Get2DPipeline(DRAW2D_COPY_DEPTH_ROUND16), "DepthShiftInRound16");
+	} else {
+		CopyDepthRect(temp, 0, 0, vfb->fbo, xOffset * scale, 0, w, h, scale, "DepthShiftIn");
+	}
 	gpuStats.perFrame.numDepthCopies++;
 	draw_->Invalidate(InvalidationFlags::CACHED_RENDER_STATE);
 	RebindFramebuffer("After ShiftDepthForOffsetRendering");
 	gstate_c.Dirty(DIRTY_ALL_RENDER_STATE);
+	return round;
+}
+
+bool FramebufferManagerCommon::CanRoundDepth() const {
+	const Draw::DeviceCaps &caps = draw_->GetDeviceCaps();
+	// A 16-bit depth buffer rounds by itself, and PixelDepthRounding already rounds everything (its own way).
+	return useBufferedRendering_ && caps.fragmentShaderDepthWriteSupported && caps.preferredDepthBufferFormat != Draw::DataFormat::D16 &&
+		!gstate_c.Use(GPU_ROUND_FRAGMENT_DEPTH_TO_16BIT);
+}
+
+// An EQUAL depth test against depth that the same geometry wrote in an earlier draw needs both draws to land on exactly
+// the same value. With the PSP's 16-bit depth they do, but at our precision the two can come out a hair apart, with
+// different shaders or batching, or drawn at a different X offset: Silent Hill: Origins lights its flashlight only
+// where the scene's depth is EQUAL, and missed scattered pixels (#16126). So once a buffer has had an EQUAL test, its
+// depth is rounded to 16 bits from its next depth clear on, so everything in it gets rounded the same way. Only those
+// buffers: writing depth from the shader costs the early depth test.
+void FramebufferManagerCommon::TrackEqualDepthTests(VirtualFramebuffer *vfb) {
+	if (!vfb) {
+		return;
+	}
+	if (gstate.isModeClear()) {
+		if ((vfb->usageFlags & (FB_USAGE_EQUAL_DEPTH | FB_USAGE_ROUND_DEPTH)) == FB_USAGE_EQUAL_DEPTH && gstate.isClearModeDepthMask()) {
+			vfb->usageFlags |= FB_USAGE_ROUND_DEPTH;
+			UpdateDepthRoundingForTarget();
+		}
+	} else if (gstate.isDepthTestEnabled()) {
+		const GEComparison func = gstate.getDepthTestFunction();
+		if (func == GE_COMP_EQUAL || func == GE_COMP_NOTEQUAL) {
+			vfb->usageFlags |= FB_USAGE_EQUAL_DEPTH;
+		}
+	}
+}
+
+// Whether draws to the current target round depth (FS_BIT_ROUND_DEPTH): a buffer that rounds (TrackEqualDepthTests), or
+// one drawn at an X offset against depth shifted over with rounding (ShiftDepthForOffsetRendering).
+void FramebufferManagerCommon::UpdateDepthRoundingForTarget() {
+	const bool roundsAtOffset = depthRoundedFor_ != 0 && depthRoundedFor_ == lastRenderAddress_ && gstate_c.curRTOffsetX > 0;
+	const bool round = roundsAtOffset || (currentRenderVfb_ && (currentRenderVfb_->usageFlags & FB_USAGE_ROUND_DEPTH) != 0 && CanRoundDepth());
+	if (round != gstate_c.roundDepthForTarget) {
+		gstate_c.roundDepthForTarget = round;
+		gstate_c.Dirty(DIRTY_FRAGMENTSHADER_STATE);
+	}
 }
 
 void FramebufferManagerCommon::NotifyRenderFramebufferCreated(VirtualFramebuffer *vfb) {
@@ -1404,9 +1464,18 @@ bool FramebufferManagerCommon::BindFramebufferAsColorTexture(int stage, VirtualF
 		WARN_LOG_ONCE(selfTextureCopy, Log::G3D, "Attempting to texture from current render target (src=%08x / target=%08x / flags=%d), making a copy", framebuffer->fb_address, currentRenderVfb_->fb_address, flags);
 		// TODO: Maybe merge with bvfbs_?  Not sure if those could be packing, and they're created at a different size.
 		if (currentFramebufferCopy_ && (flags & BINDFBCOLOR_UNCACHED) == 0) {
-			// We have a copy already that hasn't been invalidated, let's keep using it.
-			draw_->BindFramebufferAsTexture(currentFramebufferCopy_, stage, Draw::Aspect::COLOR_BIT, layer);
-			return true;
+			// We have a copy already that hasn't been invalidated. It only holds what was drawn when it was made, though,
+			// and draws since can have reached past that: Silent Hill: Origins downsamples its light buffer into the
+			// undrawn space beside it and reads that back, with no TEXFLUSH in between, so the old copy gave it black
+			// and the whole room went dark (#16126). Keep using it only if it covers what this draw reads.
+			int x, y, w, h;
+			GetColorTextureCopyRect(framebuffer, flags, &x, &y, &w, &h);
+			const CopyRect &c = currentFramebufferCopyRect_;
+			if (c.fbo == currentFramebufferCopy_ && (w <= 0 || h <= 0 || (x >= c.x && y >= c.y && x + w <= c.x + c.w && y + h <= c.y + c.h))) {
+				draw_->BindFramebufferAsTexture(currentFramebufferCopy_, stage, Draw::Aspect::COLOR_BIT, layer);
+				return true;
+			}
+			currentFramebufferCopy_ = nullptr;
 		}
 		const bool maskRead = (flags & BINDFBCOLOR_MASK_READ) != 0;
 		if (maskRead && maskCopy_ && maskCopyVfb_ == framebuffer && maskCopyMask_ == gstate.getColorMask()) {
@@ -1471,13 +1540,13 @@ bool FramebufferManagerCommon::BindFramebufferAsColorTexture(int stage, VirtualF
 	}
 }
 
-void FramebufferManagerCommon::CopyFramebufferForColorTexture(VirtualFramebuffer *dst, VirtualFramebuffer *src, int flags, int layer, bool *partial) {
-	int x = 0;
-	int y = 0;
-	int w = src->drawnWidth;
-	int h = src->drawnHeight;
-
-	*partial = false;
+// The part of the render target a draw texturing from it needs copied: what it was drawn in, or with
+// BINDFBCOLOR_MAY_COPY_WITH_UV, just what the draw's UVs cover. Returns whether it cropped to the UVs.
+bool FramebufferManagerCommon::GetColorTextureCopyRect(const VirtualFramebuffer *src, int flags, int *x, int *y, int *w, int *h) const {
+	*x = 0;
+	*y = 0;
+	*w = src->drawnWidth;
+	*h = src->drawnHeight;
 
 	// If max is not > min, we probably could not detect it.  Skip.
 	// See the vertex decoder, where this is updated.
@@ -1489,27 +1558,36 @@ void FramebufferManagerCommon::CopyFramebufferForColorTexture(VirtualFramebuffer
 		const int texelsPerPixel = gstate.getTextureFormat() == GE_TFMT_CLUT8 ? BufferFormatBytesPerPixel(src->fb_format) : 1;
 		const int minU = gstate_c.vertBounds.minU / texelsPerPixel;
 		const int maxU = (gstate_c.vertBounds.maxU + texelsPerPixel - 1) / texelsPerPixel;
-		x = std::max(minU - 1, 0);
-		y = std::max(gstate_c.vertBounds.minV - 1, 0);
-		w = std::min(maxU + 1, (int)src->drawnWidth) - x;
-		h = std::min(gstate_c.vertBounds.maxV + 1, (int)src->drawnHeight) - y;
+		*x = std::max(minU - 1, 0);
+		*y = std::max(gstate_c.vertBounds.minV - 1, 0);
+		*w = std::min(maxU + 1, (int)src->drawnWidth) - *x;
+		*h = std::min(gstate_c.vertBounds.maxV + 1, (int)src->drawnHeight) - *y;
 
 		// If we bound a framebuffer, apply the byte offset as pixels to the copy too.
 		if (flags & BINDFBCOLOR_APPLY_TEX_OFFSET) {
-			x += gstate_c.curTextureXOffset / texelsPerPixel;
-			y += gstate_c.curTextureYOffset;
+			*x += gstate_c.curTextureXOffset / texelsPerPixel;
+			*y += gstate_c.curTextureYOffset;
 		}
+		return true;
+	}
+	return false;
+}
 
+void FramebufferManagerCommon::CopyFramebufferForColorTexture(VirtualFramebuffer *dst, VirtualFramebuffer *src, int flags, int layer, bool *partial) {
+	int x, y, w, h;
+	if (GetColorTextureCopyRect(src, flags, &x, &y, &w, &h)) {
 		// We'll have to reapply these next time since we cropped to UV.
 		gstate_c.Dirty(DIRTY_TEXTURE_PARAMS);
 	}
 
+	*partial = false;
 	if (x < src->drawnWidth && y < src->drawnHeight && w > 0 && h > 0) {
 		if (x != 0 || y != 0 || w < src->drawnWidth || h < src->drawnHeight) {
 			*partial = true;
 		}
 		BlitFramebuffer(dst, x, y, src, x, y, w, h, 0, RASTER_COLOR, "CopyFBForColorTexture");
 	}
+	currentFramebufferCopyRect_ = { dst->fbo, x, y, w, h };
 }
 
 // Whether the 480x272 the display shows from addr is all in memory. The PSP takes strides that
@@ -3176,6 +3254,7 @@ void FramebufferManagerCommon::DestroyAllFBOs() {
 	currentRenderVfb_ = nullptr;
 	// Or a new framebuffer at the same address would skip its depth shift.
 	depthShiftedFor_ = 0;
+	depthRoundedFor_ = 0;
 	lastRenderAddress_ = 0;
 	displayFramebuf_ = nullptr;
 	prevDisplayFramebuf_ = nullptr;
@@ -3824,6 +3903,7 @@ void FramebufferManagerCommon::ReleasePipelines() {
 	DoRelease(draw2DPipelineColorRect2Lin_);
 	DoRelease(draw2DPipelineColorSample0_);
 	DoRelease(draw2DPipelineCopyDepth_);
+	DoRelease(draw2DPipelineCopyDepthRound16_);
 	DoRelease(draw2DPipelineEncodeDepth_);
 	DoRelease(draw2DPipeline565ToDepth_);
 	DoRelease(draw2DPipeline565ToDepthDeswizzle_);
