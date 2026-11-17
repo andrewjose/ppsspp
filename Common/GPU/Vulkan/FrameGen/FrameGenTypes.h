@@ -37,6 +37,7 @@ struct LsfgConfig {
 	u8 LsfgFlowScale = 100;     // optical-flow resolution, 25..100 percent
 	bool LsfgPerformance = true;
 	bool LsfgFp16 = false;
+	bool LsfgAutoPause = false; // present as is when the game rate times the multiplier is above the refresh rate
 	u32 LsfgTargetRate = 0;     // output Hz the pacer aims for, 0 = fixed multiplier
 	std::string LsfgDllPath;    // the user's Lossless.dll, copied into our own storage
 	u32 LsfgDllGeneration = 0;  // bumped when a DLL is imported over the same path

@@ -47,9 +47,11 @@ made with, and a present with the same count as the last one goes out without ge
 
 **Too fast for the screen.** In FIFO each generated frame takes a screen refresh. If the game's own
 rate times the multiplier is above the refresh rate (a 60 fps game at x2 on a 60 Hz screen), the
-display queue would hold the game back to half speed. So the rate of new game frames is measured
-(a running average), and while it's too high frames are shown as they are, with "paused, game too
-fast" in the overlay. This idea comes from tico-ppsspp (the Switch build of PPSSPP in the tico
+display queue would hold the game back to half speed. With "Pause when the game is too fast for the
+screen" on (off by default), the rate of new game frames is measured (a running average), and while
+it's too high frames are shown as they are, with "paused, game too fast" in the overlay. Off, it
+always generates. On Android the app also asks the screen for 60 x multiplier Hz while frame
+generation is on (PPSSPP normally asks for 60 Hz), so a 120 Hz panel actually runs at 120. This idea comes from tico-ppsspp (the Switch build of PPSSPP in the tico
 frontend), which does the same for 30 fps games on the Switch's 60 Hz screen.
 
 **Threads.** PPSSPP renders on a separate thread from emulation and the UI. The settings the shaders
@@ -94,7 +96,10 @@ it's built only where the `FRAMEGEN` CMake option is on (Android by default).
   stops and the queue idles.
 - `__DisplayFlip` (sceDisplay): `g_frameGenContentCounter++` when `fbReallyDirty` and the frame is
   flipped (next to `DisplayFireActualFlip`).
-- Rate check (`UpdatePassthrough`, after the repeat check): EMA (1/8) of the interval between new
+- Android refresh rate: the render loop in `app-android.cpp` pushes `set_frame_rate` (60 x multiplier,
+  or 60) when it changes, and `PpssppActivity.processCommand` passes it to `applyFrameRate`, which
+  honours the existing Android framerate mode setting (0 means don't request).
+- Rate check (`UpdatePassthrough`, after the repeat check, only with `FrameGenAutoPause`): EMA (1/8) of the interval between new
   game frames, samples outside 4-100 ms ignored, no generation until 8 samples. Passthrough when
   `fps * multiplier > SYSPROP_DISPLAY_REFRESH_RATE * 1.1`, entered after 8 frames that agree and left
   after 16. From tico-ppsspp's `SwitchLSFG.cpp`, which hardcodes 60 Hz and x2.
@@ -120,7 +125,7 @@ signal semaphores:
 
 `[Graphics]` in ppsspp.ini, per-game: `FrameGen`, `FrameGenMultiplier` (2-4), `FrameGenPerformance`
 (3.1p shader family, default on), `FrameGenFlowScale` (25-100), `FrameGenFp16`. Global:
-`FrameGenDllPath`. The import copies the picked file to `PSP/SYSTEM/Lossless.dll`, validates it
+`FrameGenDllPath`. `FrameGenAutoPause` (per game, default off). The import copies the picked file to `PSP/SYSTEM/Lossless.dll`, validates it
 (PE with the performance shader resources), then renames it into place.
 
 ### Known gaps
