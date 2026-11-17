@@ -25,6 +25,7 @@
 #include "FrameGen.h"
 #include "FrameGenTypes.h"
 #include "LosslessDll.h"
+#include "LsfgCommon.h"
 #include "LsfgVkCompat.h"
 #include "VulkanFrameGen.h"
 
@@ -55,7 +56,13 @@ bool s_active = false;
 VkDevice s_vk_device = VK_NULL_HANDLE;
 VkSwapchainKHR s_swapchain = VK_NULL_HANDLE;
 uint32_t s_swapchain_generation = 0;
+uint32_t s_failed_swapchain_generation = 0;
 uint32_t s_image_count = 0;
+// Frame slots: each holds a command buffer, a fence and one generation image per interpolated
+// frame. FrameGen caches a descriptor set per generation image view and has LSFG_MAX_TARGETS of
+// them, so the ring stays small enough for every view to keep its own (wrapping would rewrite
+// sets a submitted frame still reads).
+uint32_t s_slot_count = 0;
 uint32_t s_multiplier = 1;
 u8 s_flow_scale_percent = 100;
 bool s_performance_requested = false;
@@ -274,7 +281,9 @@ bool CreateResources(VulkanContext *vulkan) {
 		return false;
 	}
 
-	s_slots.resize(s_image_count);
+	const u32 per_frame_images = std::max<u32>(s_multiplier, 2u) - 1u;
+	s_slot_count = std::clamp<u32>((u32)Vulkan::LSFG_MAX_TARGETS / per_frame_images, 1u, s_image_count);
+	s_slots.resize(s_slot_count);
 	VkSemaphoreCreateInfo sem_ci{VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO};
 	VkFenceCreateInfo fence_ci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
 	for (FrameSlot &slot : s_slots) {
@@ -300,8 +309,7 @@ bool CreateResources(VulkanContext *vulkan) {
 	}
 
 	// One generation image per slot per interpolated frame, so the slot fence covers them too.
-	const u32 per_frame = std::max<u32>(s_multiplier, 2u) - 1u;
-	s_gen_images.resize(static_cast<size_t>(s_image_count) * per_frame);
+	s_gen_images.resize(static_cast<size_t>(s_slot_count) * per_frame_images);
 	for (GenImage &g : s_gen_images) {
 		VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
 		ici.imageType = VK_IMAGE_TYPE_2D;
@@ -340,7 +348,7 @@ bool CreateResources(VulkanContext *vulkan) {
 	if (limits.timestampComputeAndGraphics && limits.timestampPeriod > 0.0f && valid_bits > 0) {
 		VkQueryPoolCreateInfo query_ci{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
 		query_ci.queryType = VK_QUERY_TYPE_TIMESTAMP;
-		query_ci.queryCount = 2 * s_image_count;
+		query_ci.queryCount = 2 * s_slot_count;
 		if (vkCreateQueryPool(s_vk_device, &query_ci, nullptr, &s_query_pool) == VK_SUCCESS) {
 			s_ns_per_tick = limits.timestampPeriod;
 			s_tick_mask = valid_bits >= 64 ? ~0ull : ((1ull << valid_bits) - 1);
@@ -374,9 +382,19 @@ bool EnsureInitialized(VulkanContext *vulkan, uint32_t image_count) {
 		format == s_format && SettingsMatch()) {
 		return true;
 	}
+	// The swapchain isn't built for frame generation yet (it was created before the settings were
+	// posted, or they just changed): the graphics context rebuilds it. Waiting, not failing.
+	const VkPresentModeKHR mode = vulkan->GetPresentMode();
+	if (vulkan->GetSwapchainFrameGenImages() == 0 ||
+		(mode != VK_PRESENT_MODE_FIFO_KHR && mode != VK_PRESENT_MODE_FIFO_RELAXED_KHR)) {
+		if (s_active) {
+			Shutdown();
+		}
+		return false;
+	}
 	if (s_failed.load(std::memory_order_relaxed) && !s_active && g_lsfgConfig.LsfgDllPath == s_dll_path &&
-		g_lsfgConfig.LsfgDllGeneration == s_dll_generation) {
-		// Already failed with these settings; don't retry every frame.
+		g_lsfgConfig.LsfgDllGeneration == s_dll_generation && vulkan->GetSwapchainGeneration() == s_failed_swapchain_generation) {
+		// Already failed with these settings and this swapchain; don't retry every frame.
 		return false;
 	}
 
@@ -385,15 +403,18 @@ bool EnsureInitialized(VulkanContext *vulkan, uint32_t image_count) {
 	s_dll_path = g_lsfgConfig.LsfgDllPath;
 	s_dll_generation = g_lsfgConfig.LsfgDllGeneration;
 
+	s_failed_swapchain_generation = vulkan->GetSwapchainGeneration();
+
 	const VkImageUsageFlags usage = vulkan->GetSwapchainImageUsage();
 	if (!(usage & VK_IMAGE_USAGE_TRANSFER_SRC_BIT) || !(usage & VK_IMAGE_USAGE_TRANSFER_DST_BIT)) {
 		SetFailure("the swapchain images can't be copied to and from");
 		return false;
 	}
-	const VkPresentModeKHR mode = vulkan->GetPresentMode();
-	if (mode != VK_PRESENT_MODE_FIFO_KHR && mode != VK_PRESENT_MODE_FIFO_RELAXED_KHR) {
-		// MAILBOX and IMMEDIATE replace each generated frame with the real one presented after it.
-		// The graphics context rebuilds the swapchain as FIFO once frame generation is on.
+	// The generated frames are written by compute shaders as storage images in the swapchain format.
+	VkFormatProperties format_props{};
+	vkGetPhysicalDeviceFormatProperties(vulkan->GetCurrentPhysicalDevice(), format, &format_props);
+	if (!(format_props.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) {
+		SetFailure("the display format can't be a storage image");
 		return false;
 	}
 	if (ExtraAcquirable(vulkan, image_count) == 0) {
@@ -465,6 +486,7 @@ void Shutdown() {
 	s_format = VK_FORMAT_UNDEFINED;
 	s_swapchain = VK_NULL_HANDLE;
 	s_image_count = 0;
+	s_slot_count = 0;
 	s_frame_index = 0;
 	s_vk_device = VK_NULL_HANDLE;
 	s_have_content_id = false;
@@ -574,13 +596,13 @@ bool PresentWithGeneration(VulkanContext *vulkan, const VkImage *swapchainImages
 		if (acq != VK_SUCCESS && acq != VK_SUBOPTIMAL_KHR) {
 			break;
 		}
+		// The image is ours now and its fence will signal, so no timeout: giving up here would leak
+		// the image (it counts against what we may hold) and leave the fence pending for next time.
+		vkWaitForFences(s_vk_device, 1, &slot.acquire_fences[i], VK_TRUE, UINT64_MAX);
+		vkResetFences(s_vk_device, 1, &slot.acquire_fences[i]);
 		if (image_index >= imageCount) {
 			break;
 		}
-		if (vkWaitForFences(s_vk_device, 1, &slot.acquire_fences[i], VK_TRUE, kGeneratedAcquireTimeoutNs) != VK_SUCCESS) {
-			break;
-		}
-		vkResetFences(s_vk_device, 1, &slot.acquire_fences[i]);
 
 		GenImage &gen = s_gen_images[slot_index * per_frame_images + i];
 		s_frame_gen->GenerateInto(*s_device, cmdbuf, *gen.image, gen.view, i);
@@ -635,6 +657,7 @@ bool PresentWithGeneration(VulkanContext *vulkan, const VkImage *swapchainImages
 	// Generated frames first, they sit between the previous real frame and this one. Presents on
 	// one queue are processed in call order.
 	u32 presented_generated = 0;
+	VkResult worst_generated = VK_SUCCESS;
 	for (size_t i = 0; i < acquired; i++) {
 		VkPresentInfoKHR present{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
 		present.waitSemaphoreCount = 1;
@@ -642,12 +665,15 @@ bool PresentWithGeneration(VulkanContext *vulkan, const VkImage *swapchainImages
 		present.swapchainCount = 1;
 		present.pSwapchains = &s_swapchain;
 		present.pImageIndices = &acquired_index[i];
-		// VK_SUBOPTIMAL_KHR is a success: the frame was presented.
+		// Keep going after a failure: every acquired image has to be handed back, and every signalled
+		// semaphore waited on. VK_SUBOPTIMAL_KHR is a success: the frame was presented.
 		const VkResult pres = vkQueuePresentKHR(vulkan->GetGraphicsQueue(), &present);
-		if (pres != VK_SUCCESS && pres != VK_SUBOPTIMAL_KHR) {
-			break;
+		if (pres == VK_SUCCESS || pres == VK_SUBOPTIMAL_KHR) {
+			presented_generated++;
 		}
-		presented_generated++;
+		if (pres != VK_SUCCESS && pres != VK_SUBOPTIMAL_KHR && worst_generated == VK_SUCCESS) {
+			worst_generated = pres;
+		}
 	}
 
 	// The real frame last.
@@ -659,6 +685,12 @@ bool PresentWithGeneration(VulkanContext *vulkan, const VkImage *swapchainImages
 	present.pSwapchains = &s_swapchain;
 	present.pImageIndices = &realIndex;
 	*presentResult = vkQueuePresentKHR(vulkan->GetGraphicsQueue(), &present);
+	// The caller rebuilds the swapchain on what the real present says, so pass on an earlier error
+	// (OUT_OF_DATE, SURFACE_LOST) that it would otherwise miss. SUBOPTIMAL isn't one: Android returns
+	// it for rotation, and the real present reports it too.
+	if ((*presentResult == VK_SUCCESS || *presentResult == VK_SUBOPTIMAL_KHR) && worst_generated != VK_SUCCESS) {
+		*presentResult = worst_generated;
+	}
 	NoteFramesDisplayed(1, presented_generated);
 	return true;
 }
