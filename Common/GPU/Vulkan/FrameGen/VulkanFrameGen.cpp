@@ -511,6 +511,12 @@ bool PresentWithGeneration(VulkanContext *vulkan, const VkImage *swapchainImages
 	if (!EnsureInitialized(vulkan, imageCount) || realIndex >= imageCount) {
 		return false;
 	}
+	if (s_failed.load(std::memory_order_relaxed)) {
+		// Failed while running (the DLL's shaders, say). Nothing will be generated, so don't keep
+		// running the passes; the don't-retry check in EnsureInitialized keeps it down.
+		Shutdown();
+		return false;
+	}
 
 	// Nothing new since the last present: a repeated frame, a pause. Drop the history, so the frames
 	// either side of the gap are never stitched together.
