@@ -1056,6 +1056,7 @@ static void PostFrameGenConfig() {
 	config.LsfgFlowScale = (u8)std::clamp(g_Config.iFrameGenFlowScale, 25, 100);
 	config.LsfgPerformance = g_Config.bFrameGenPerformance;
 	config.LsfgFp16 = g_Config.bFrameGenFp16;
+	config.LsfgAutoPause = g_Config.bFrameGenAutoPause;
 	config.LsfgDllPath = g_Config.sFrameGenDllPath;
 	config.LsfgDllGeneration = (u32)g_frameGenDllGeneration;
 	config.CacheDir = cacheDir;

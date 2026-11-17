@@ -28,7 +28,7 @@ static uint32_t g_syncedVersion = 0;
 
 static bool ConfigEquals(const LsfgConfig &a, const LsfgConfig &b) {
 	return a.LsfgEnabled == b.LsfgEnabled && a.LsfgMultiplier == b.LsfgMultiplier && a.LsfgFlowScale == b.LsfgFlowScale &&
-		a.LsfgPerformance == b.LsfgPerformance && a.LsfgFp16 == b.LsfgFp16 && a.LsfgTargetRate == b.LsfgTargetRate &&
+		a.LsfgPerformance == b.LsfgPerformance && a.LsfgFp16 == b.LsfgFp16 && a.LsfgAutoPause == b.LsfgAutoPause && a.LsfgTargetRate == b.LsfgTargetRate &&
 		a.LsfgDllPath == b.LsfgDllPath && a.LsfgDllGeneration == b.LsfgDllGeneration && a.CacheDir == b.CacheDir &&
 		a.BuildId == b.BuildId;
 }

@@ -1972,6 +1972,14 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 		} else if (command.equals("sustainedPerfMode")) {
 			updateSustainedPerformanceMode();
 			return true;
+		} else if (command.equals("set_frame_rate")) {
+			// Frame generation wants the screen at a multiple of 60 Hz.
+			try {
+				applyFrameRate(mSurface, Float.parseFloat(params));
+			} catch (NumberFormatException e) {
+				Log.e(TAG, "Bad frame rate: " + params);
+			}
+			return true;
 		} else if (command.equals("externalDisplay")) {
 			updateExternalDisplay();
 			return true;
