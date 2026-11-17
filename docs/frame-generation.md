@@ -45,6 +45,13 @@ two identical frames wastes GPU time and, worse, joins the frames on either side
 fake motion. So the emulated display counts new game frames, each present carries the count it was
 made with, and a present with the same count as the last one goes out without generation.
 
+**Too fast for the screen.** In FIFO each generated frame takes a screen refresh. If the game's own
+rate times the multiplier is above the refresh rate (a 60 fps game at x2 on a 60 Hz screen), the
+display queue would hold the game back to half speed. So the rate of new game frames is measured
+(a running average), and while it's too high frames are shown as they are, with "paused, game too
+fast" in the overlay. This idea comes from tico-ppsspp (the Switch build of PPSSPP in the tico
+frontend), which does the same for 30 fps games on the Switch's 60 Hz screen.
+
 **Threads.** PPSSPP renders on a separate thread from emulation and the UI. The settings the shaders
 read belong to that render thread. The UI posts a copy under a lock, and the render thread takes it
 at the start of each present. Teardown happens where the render thread is already stopped (losing
@@ -87,6 +94,10 @@ it's built only where the `FRAMEGEN` CMake option is on (Android by default).
   stops and the queue idles.
 - `__DisplayFlip` (sceDisplay): `g_frameGenContentCounter++` when `fbReallyDirty` and the frame is
   flipped (next to `DisplayFireActualFlip`).
+- Rate check (`UpdatePassthrough`, after the repeat check): EMA (1/8) of the interval between new
+  game frames, samples outside 4-100 ms ignored, no generation until 8 samples. Passthrough when
+  `fps * multiplier > SYSPROP_DISPLAY_REFRESH_RATE * 1.1`, entered after 8 frames that agree and left
+  after 16. From tico-ppsspp's `SwitchLSFG.cpp`, which hardcodes 60 Hz and x2.
 - `NativeFrame`: `PostFrameGenConfig()` builds an `LsfgConfig` from `g_Config` and posts it
   (`LsfgPostConfig` compares and only bumps the version on change).
 
@@ -118,5 +129,9 @@ signal semaphores:
   ARMSX2's mode that interpolates the emulator's own image before scaling isn't ported.
 - No GPU check beyond the memory model and null descriptors. On anything other than Adreno 7xx+ it
   may fail to start (the overlay says why) or misbehave.
+- Coming out of passthrough, the first generated frame pairs the last interpolated frame with the
+  new one, which can show one frame of wrong motion.
+- No on-disk VkPipelineCache for the passes (tico-ppsspp keeps one), so their pipelines compile at
+  each start. The SPIR-V extraction is cached.
 - Built only with CMake. The vcxproj, UWP, legacy Android.mk and libretro builds don't include it.
 - `VK_EXT_robustness2` is enabled even when the feature is compiled out.

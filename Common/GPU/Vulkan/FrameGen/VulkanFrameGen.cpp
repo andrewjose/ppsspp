@@ -20,6 +20,7 @@
 
 #include "Common/GPU/Vulkan/VulkanContext.h"
 #include "Common/Log.h"
+#include "Common/System/System.h"
 
 #include "FrameGen.h"
 #include "FrameGenTypes.h"
@@ -41,6 +42,8 @@ std::atomic<float> s_gpu_ms{0.0f};
 std::atomic<bool> s_fp16_active{false};
 std::atomic<bool> s_no_headroom{false};
 std::atomic<bool> s_failed{false};
+std::atomic<bool> s_passthrough{false};
+std::atomic<float> s_source_fps{0.0f};
 std::mutex s_failure_mutex;
 std::string s_failure_reason;
 
@@ -64,6 +67,68 @@ VkFormat s_format = VK_FORMAT_UNDEFINED;
 
 uint32_t s_last_content_id = 0;
 bool s_have_content_id = false;
+
+// How fast new game frames arrive, as in tico-ppsspp's SwitchLSFG.cpp. Under FIFO, generated
+// frames take display refreshes, so a game whose rate times the multiplier is above the refresh
+// rate would be held back (a 60 fps game at x2 on a 60 Hz screen runs at 30). Those frames go out
+// as they are instead.
+std::chrono::steady_clock::time_point s_last_source_time{};
+bool s_have_source_time = false;
+double s_source_interval_ns = 0.0;
+u32 s_source_samples = 0;
+u32 s_passthrough_flip_count = 0;
+
+void ResetRate() {
+	s_have_source_time = false;
+	s_source_interval_ns = 0.0;
+	s_source_samples = 0;
+	s_passthrough_flip_count = 0;
+	s_passthrough.store(false, std::memory_order_relaxed);
+	s_source_fps.store(0.0f, std::memory_order_relaxed);
+}
+
+// Called for each new game frame. True if it should be presented without generation.
+bool UpdatePassthrough(u32 multiplier) {
+	const auto now = std::chrono::steady_clock::now();
+	if (s_have_source_time) {
+		const double interval = std::chrono::duration<double, std::nano>(now - s_last_source_time).count();
+		// Ignore gaps (loading, menus) and bursts.
+		if (interval >= 4e6 && interval <= 100e6) {
+			s_source_interval_ns = s_source_samples == 0 ? interval : s_source_interval_ns * 0.875 + interval * 0.125;
+			if (s_source_samples < 120) {
+				s_source_samples++;
+			}
+		}
+	}
+	s_last_source_time = now;
+	s_have_source_time = true;
+
+	// Until the rate is known, don't generate: starting and stopping is what looks bad.
+	if (s_source_samples < 8 || s_source_interval_ns <= 0.0) {
+		return true;
+	}
+	const float source_fps = (float)(1e9 / s_source_interval_ns);
+	s_source_fps.store(source_fps, std::memory_order_relaxed);
+	float refresh = System_GetPropertyFloat(SYSPROP_DISPLAY_REFRESH_RATE);
+	if (!(refresh > 20.0f)) {
+		refresh = 60.0f;
+	}
+	const bool too_fast = source_fps * (float)multiplier > refresh * 1.1f;
+	bool passthrough = s_passthrough.load(std::memory_order_relaxed);
+	// Hysteresis: quick to stop generating (8 frames), slower to start again (16).
+	if (too_fast != passthrough) {
+		if (++s_passthrough_flip_count >= (passthrough ? 16u : 8u)) {
+			passthrough = too_fast;
+			s_passthrough.store(passthrough, std::memory_order_relaxed);
+			s_passthrough_flip_count = 0;
+			INFO_LOG(Log::G3D, "LSFG: %s (game %.1f fps, x%u, display %.0f Hz).", passthrough ? "passing frames through" : "generating",
+				source_fps, multiplier, refresh);
+		}
+	} else {
+		s_passthrough_flip_count = 0;
+	}
+	return passthrough;
+}
 
 // Interpolated frames are generated into images we own, then copied into the acquired swapchain
 // image. Dispatching straight into a swapchain image through a storage view crashed Turnip at
@@ -403,6 +468,7 @@ void Shutdown() {
 	s_frame_index = 0;
 	s_vk_device = VK_NULL_HANDLE;
 	s_have_content_id = false;
+	ResetRate();
 
 	s_display_fps.store(0.0f, std::memory_order_relaxed);
 	s_fps_window_open = false;
@@ -430,6 +496,10 @@ bool PresentWithGeneration(VulkanContext *vulkan, const VkImage *swapchainImages
 	s_last_content_id = contentId;
 	s_have_content_id = true;
 	if (!new_content) {
+		NoteFramesDisplayed(1, 0);
+		return false;
+	}
+	if (UpdatePassthrough(s_multiplier)) {
 		NoteFramesDisplayed(1, 0);
 		return false;
 	}
@@ -608,6 +678,11 @@ std::string GetStatusText() {
 	const float fps = s_display_fps.load(std::memory_order_relaxed);
 	if (fps <= 0.0f) {
 		return "LSFG: starting";
+	}
+	if (s_passthrough.load(std::memory_order_relaxed)) {
+		char buf[96];
+		snprintf(buf, sizeof(buf), "LSFG: paused, game too fast (%.0f fps)", s_source_fps.load(std::memory_order_relaxed));
+		return buf;
 	}
 	char buf[96];
 	const float gpu_ms = s_gpu_ms.load(std::memory_order_relaxed);

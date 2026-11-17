@@ -136,7 +136,7 @@ static void BuildFrameGenPage(SettingsPage *page) {
 	page->Description({I18NCat::GRAPHICS, "FrameGenDescription",
 		"Lossless Scaling's frame generation shows extra frames in between the game's, for smoother motion. "
 		"It doesn't make the game run faster, and it adds a little input lag. Best with a 30 fps game on a 60 Hz screen, "
-		"or a 60 fps game on a 120 Hz screen. Needs your own copy of Lossless Scaling: import its Lossless.dll below. "
+		"or a 60 fps game on a 120 Hz screen (when the game is too fast for the screen, frames are shown as they are). Needs your own copy of Lossless Scaling: import its Lossless.dll below. "
 		"Vulkan only, made for Adreno 7xx and newer GPUs."});
 
 	page->Header();
@@ -173,7 +173,7 @@ static void BuildFrameGenPage(SettingsPage *page) {
 	page->Setting(&g_Config.bFrameGenPerformance).Enabled(&g_Config.bFrameGen)
 		.Hint({I18NCat::GRAPHICS, "FrameGenPerformanceHint", "Lighter shaders. Recommended on phones and handhelds."});
 	page->Setting(&g_Config.iFrameGenFlowScale).Enabled(&g_Config.bFrameGen)
-		.Hint({I18NCat::GRAPHICS, "FrameGenFlowScaleHint", "Lower is faster, with less accurate motion."});
+		.Hint({I18NCat::GRAPHICS, "FrameGenFlowScaleHint", "100% picks it from the game's resolution. Lower is faster, with less accurate motion."});
 	page->Setting(&g_Config.bFrameGenFp16).Enabled(&g_Config.bFrameGen)
 		.Hint({I18NCat::GRAPHICS, "FrameGenFp16Hint", "Faster where the GPU supports it."});
 
