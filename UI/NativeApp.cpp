@@ -1058,6 +1058,33 @@ static void ClearFrameGenStartMarker() {
 	}
 }
 
+// The render thread reads the DLL, and it can't open content URIs (Android storage, see
+// LsfgHost::MarkRenderThread). Such a DLL is copied to the app's cache here on the UI thread,
+// once per session and again after each import, and the render thread gets the copy.
+static std::string FrameGenRenderThreadDllPath(const std::string &cacheDir, const std::string &dllPath) {
+	if (dllPath.empty() || Path(dllPath).Type() != PathType::CONTENT_URI) {
+		return dllPath;
+	}
+	static std::string copiedFrom;
+	static int copiedGeneration = -1;
+	static bool copyOk = false;
+	const Path localCopy = Path(cacheDir) / "Lossless.dll";
+	if (copiedFrom != dllPath || copiedGeneration != g_frameGenDllGeneration) {
+		copiedFrom = dllPath;
+		copiedGeneration = g_frameGenDllGeneration;
+		std::string data;
+		copyOk = File::ReadBinaryFileToString(Path(dllPath), &data) && !data.empty() &&
+			File::WriteDataToFile(false, data.data(), data.size(), localCopy);
+		if (copyOk) {
+			NOTICE_LOG(Log::G3D, "LSFG step: copied Lossless.dll from storage to %s", localCopy.c_str());
+		} else {
+			ERROR_LOG(Log::G3D, "LSFG: couldn't copy %s to %s", dllPath.c_str(), localCopy.c_str());
+		}
+	}
+	// On failure, still a path the render thread can try: it fails cleanly with "not found".
+	return localCopy.ToString();
+}
+
 // Hands the frame generation settings to the render thread (which only takes them if they changed).
 static void PostFrameGenConfig() {
 	static bool checkedMarker = false;
@@ -1090,7 +1117,7 @@ static void PostFrameGenConfig() {
 	config.LsfgPerformance = g_Config.bFrameGenPerformance;
 	config.LsfgFp16 = g_Config.bFrameGenFp16;
 	config.LsfgAutoPause = g_Config.bFrameGenAutoPause;
-	config.LsfgDllPath = g_Config.sFrameGenDllPath;
+	config.LsfgDllPath = FrameGenRenderThreadDllPath(cacheDir, g_Config.sFrameGenDllPath);
 	config.LsfgDllGeneration = (u32)g_frameGenDllGeneration;
 	config.CacheDir = cacheDir;
 	config.BuildId = PPSSPP_GIT_VERSION;
