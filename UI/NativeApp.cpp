@@ -1078,8 +1078,41 @@ bool CreateGlobalPipelines();
 #ifdef PPSSPP_HAS_FRAMEGEN
 int g_frameGenDllGeneration = 0;
 
+// Crash guard: this file exists while frame generation is starting. If PPSSPP dies before the
+// render thread says it worked (or failed cleanly), the next run finds it and keeps frame
+// generation off for that session, so a driver crash can't become a crash loop.
+static Path FrameGenStartMarker() {
+	return GetSysDirectory(DIRECTORY_SYSTEM) / "lsfg_starting.txt";
+}
+static bool g_frameGenCrashedLastRun = false;
+static bool g_frameGenMarkerWritten = false;
+
+static void ClearFrameGenStartMarker() {
+	if (g_frameGenMarkerWritten) {
+		File::Delete(FrameGenStartMarker(), true);
+		g_frameGenMarkerWritten = false;
+	}
+}
+
 // Hands the frame generation settings to the render thread (which only takes them if they changed).
 static void PostFrameGenConfig() {
+	static bool checkedMarker = false;
+	if (!checkedMarker) {
+		checkedMarker = true;
+		if (File::Exists(FrameGenStartMarker())) {
+			g_frameGenCrashedLastRun = true;
+			File::Delete(FrameGenStartMarker(), true);
+			ERROR_LOG(Log::G3D, "LSFG: PPSSPP closed while starting frame generation last time; it stays off this session.");
+		}
+	}
+	if (g_frameGenCrashedLastRun && g_Config.bFrameGen) {
+		static bool shown = false;
+		if (!shown) {
+			shown = true;
+			g_OSD.Show(OSDType::MESSAGE_ERROR, "Frame generation is off this time: PPSSPP closed while starting it last time. Restart PPSSPP to try again.", 10.0f);
+		}
+	}
+
 	static std::string cacheDir;
 	if (cacheDir.empty()) {
 		const Path dir = GetSysDirectory(DIRECTORY_APP_CACHE) / "lsfg";
@@ -1087,7 +1120,7 @@ static void PostFrameGenConfig() {
 		cacheDir = dir.ToString();
 	}
 	LsfgConfig config;
-	config.LsfgEnabled = g_Config.bFrameGen && GetGPUBackend() == GPUBackend::VULKAN;
+	config.LsfgEnabled = g_Config.bFrameGen && GetGPUBackend() == GPUBackend::VULKAN && !g_frameGenCrashedLastRun;
 	config.LsfgMultiplier = (u32)std::clamp(g_Config.iFrameGenMultiplier, 2, 4);
 	config.LsfgFlowScale = (u8)std::clamp(g_Config.iFrameGenFlowScale, 25, 100);
 	config.LsfgPerformance = g_Config.bFrameGenPerformance;
@@ -1097,6 +1130,20 @@ static void PostFrameGenConfig() {
 	config.LsfgDllGeneration = (u32)g_frameGenDllGeneration;
 	config.CacheDir = cacheDir;
 	config.BuildId = PPSSPP_GIT_VERSION;
+
+	const bool wanted = config.LsfgEnabled && !config.LsfgDllPath.empty();
+	if (!wanted) {
+		ClearFrameGenStartMarker();
+		g_frameGenStartSettled.store(false, std::memory_order_relaxed);
+	} else if (g_frameGenStartSettled.load(std::memory_order_relaxed)) {
+		ClearFrameGenStartMarker();
+	} else if (!g_frameGenMarkerWritten) {
+		// Written before the render thread can start it (it picks the settings up below).
+		const char text[] = "Frame generation was starting. If PPSSPP is closed, it crashed doing so.\n";
+		File::WriteDataToFile(true, text, sizeof(text) - 1, FrameGenStartMarker());
+		g_frameGenMarkerWritten = true;
+		NOTICE_LOG(Log::G3D, "LSFG step: settings posted (x%u, dll %s)", config.LsfgMultiplier, config.LsfgDllPath.c_str());
+	}
 	LsfgPostConfig(config);
 }
 #endif
@@ -2098,6 +2145,10 @@ void NativeResized() {
 
 void NativeShutdown() {
 	INFO_LOG(Log::System, "NativeShutdown begin");
+#ifdef PPSSPP_HAS_FRAMEGEN
+	// A clean exit isn't a crash.
+	ClearFrameGenStartMarker();
+#endif
 	ClearAchievementsHostOverride();
 	g_nativeMainThreadReady = false;
 
