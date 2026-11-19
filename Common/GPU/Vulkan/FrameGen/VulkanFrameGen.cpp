@@ -511,6 +511,7 @@ void Shutdown() {
 bool PresentWithGeneration(VulkanContext *vulkan, const VkImage *swapchainImages, uint32_t imageCount,
 	uint32_t realIndex, VkSemaphore renderFinished, uint32_t contentId, const void *realPresentNext,
 	VkResult *presentResult) {
+	LsfgHost::MarkRenderThread();
 	LsfgSyncConfig();
 	if (!g_lsfgConfig.LsfgEnabled || g_lsfgConfig.LsfgDllPath.empty()) {
 		if (s_active) {

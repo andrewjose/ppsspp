@@ -112,11 +112,29 @@ bool StatFile(const std::string &path, u64 *size, u64 *mtime) {
 	return true;
 }
 
+static thread_local bool t_render_thread = false;
+
+void MarkRenderThread() {
+	t_render_thread = true;
+}
+
+// True if this thread mustn't touch the path (see FrameGenTypes.h).
+static bool Unreachable(const std::string &path) {
+	if (t_render_thread && Path(path).Type() == PathType::CONTENT_URI) {
+		ERROR_LOG(Log::G3D, "LSFG: can't open %s from the render thread (content URI)", path.c_str());
+		return true;
+	}
+	return false;
+}
+
 bool FileExists(const std::string &path) {
-	return !path.empty() && File::Exists(Path(path));
+	return !path.empty() && !Unreachable(path) && File::Exists(Path(path));
 }
 
 bool ReadWholeFile(const std::string &path, std::vector<u8> *data) {
+	if (Unreachable(path)) {
+		return false;
+	}
 	std::string str;
 	if (!File::ReadBinaryFileToString(Path(path), &str) || str.empty()) {
 		return false;
@@ -126,6 +144,9 @@ bool ReadWholeFile(const std::string &path, std::vector<u8> *data) {
 }
 
 bool WriteWholeFile(const std::string &path, const void *data, size_t size) {
+	if (Unreachable(path)) {
+		return false;
+	}
 	const Path final_path(path);
 	const Path temp_path(path + ".tmp");
 	if (!File::WriteDataToFile(false, data, size, temp_path)) {
@@ -142,6 +163,9 @@ bool WriteWholeFile(const std::string &path, const void *data, size_t size) {
 }
 
 void RemoveFile(const std::string &path) {
+	if (Unreachable(path)) {
+		return;
+	}
 	File::Delete(Path(path), true);
 }
 
