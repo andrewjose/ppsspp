@@ -63,6 +63,8 @@ uint32_t s_image_count = 0;
 // them, so the ring stays small enough for every view to keep its own (wrapping would rewrite
 // sets a submitted frame still reads).
 uint32_t s_slot_count = 0;
+u32 s_first_frames_logged = 0;
+bool s_generated_logged = false;
 uint32_t s_multiplier = 1;
 u8 s_flow_scale_percent = 100;
 bool s_performance_requested = false;
@@ -183,7 +185,9 @@ void SetFailure(const char *why) {
 	}
 	if (!s_failed.exchange(true)) {
 		ERROR_LOG(Log::G3D, "LSFG: frame generation turned off: %s", why);
+		LsfgStep("failed cleanly: %s", why);
 	}
+	g_frameGenStartSettled.store(true, std::memory_order_relaxed);
 }
 
 void NoteFramesDisplayed(u32 real, u32 generated) {
@@ -399,6 +403,8 @@ bool EnsureInitialized(VulkanContext *vulkan, uint32_t image_count) {
 	}
 
 	Shutdown();
+	LsfgStep("starting: swapchain %ux%u format %d, %u images (min %u), present mode %d, usage 0x%x", extent.width, extent.height,
+		(int)format, image_count, vulkan->GetSurfaceCapabilities().minImageCount, (int)mode, (unsigned)vulkan->GetSwapchainImageUsage());
 	s_failed.store(false, std::memory_order_relaxed);
 	s_dll_path = g_lsfgConfig.LsfgDllPath;
 	s_dll_generation = g_lsfgConfig.LsfgDllGeneration;
@@ -436,6 +442,7 @@ bool EnsureInitialized(VulkanContext *vulkan, uint32_t image_count) {
 	s_fp16_requested = g_lsfgConfig.LsfgFp16;
 
 	// The device adapter and allocator must exist before CreateResources, which allocates through them.
+	LsfgStep("checking device features");
 	s_device.emplace(vulkan);
 	if (!s_device->IsVulkanMemoryModelSupported() || !s_device->HasNullDescriptor()) {
 		s_device.reset();
@@ -445,6 +452,7 @@ bool EnsureInitialized(VulkanContext *vulkan, uint32_t image_count) {
 	}
 	s_allocator.emplace(vulkan->Allocator());
 
+	LsfgStep("creating images and command buffers");
 	if (!CreateResources(vulkan)) {
 		DestroyResources();
 		s_allocator.reset();
@@ -454,7 +462,9 @@ bool EnsureInitialized(VulkanContext *vulkan, uint32_t image_count) {
 		return false;
 	}
 
+	LsfgStep("creating the frame generator");
 	s_frame_gen.emplace(*s_allocator, vulkan);
+	s_first_frames_logged = 0;
 	s_frame_index = 0;
 	s_have_content_id = false;
 	s_active = true;
@@ -537,6 +547,12 @@ bool PresentWithGeneration(VulkanContext *vulkan, const VkImage *swapchainImages
 	}
 
 	const VkImage real_image = swapchainImages[realIndex];
+	// Step logging for the first few frames after starting, where a driver crash would be.
+	const bool log_steps = s_first_frames_logged < 3;
+	if (log_steps) {
+		s_first_frames_logged++;
+		LsfgStep("frame %u: processing (real image %u of %u)", s_first_frames_logged, realIndex, imageCount);
+	}
 
 	const u32 slot_index = static_cast<u32>(s_frame_index % s_slots.size());
 	FrameSlot &slot = s_slots[slot_index];
@@ -579,6 +595,9 @@ bool PresentWithGeneration(VulkanContext *vulkan, const VkImage *swapchainImages
 	const Vulkan::vk::CommandBuffer cmdbuf{slot.cmd};
 	s_frame_gen->Process(*s_device, cmdbuf, real_image, s_gen_images[0].view, s_extent, s_format, s_extent);
 	s_fp16_active.store(s_frame_gen->UsingFp16(), std::memory_order_relaxed);
+	if (log_steps) {
+		LsfgStep("processed (generator %s)", s_frame_gen->IsUnavailable() ? "unavailable" : "ok");
+	}
 
 	if (s_frame_gen->IsUnavailable()) {
 		SetFailure(s_frame_gen->UnavailableReason());
@@ -611,6 +630,9 @@ bool PresentWithGeneration(VulkanContext *vulkan, const VkImage *swapchainImages
 		}
 
 		GenImage &gen = s_gen_images[slot_index * per_frame_images + i];
+		if (!s_generated_logged) {
+			LsfgStep("first generation into image %u", image_index);
+		}
 		s_frame_gen->GenerateInto(*s_device, cmdbuf, *gen.image, gen.view, i);
 
 		const VkImage dst = swapchainImages[image_index];
@@ -652,6 +674,9 @@ bool PresentWithGeneration(VulkanContext *vulkan, const VkImage *swapchainImages
 	submit.pCommandBuffers = &slot.cmd;
 	submit.signalSemaphoreCount = static_cast<u32>(acquired) + 1u;
 	submit.pSignalSemaphores = slot.done_sems.data();
+	if (log_steps) {
+		LsfgStep("submitting (%zu generated images acquired)", acquired);
+	}
 	if (vkQueueSubmit(vulkan->GetGraphicsQueue(), 1, &submit, slot.fence) != VK_SUCCESS) {
 		SetFailure("vkQueueSubmit failed");
 		return false;
@@ -676,6 +701,11 @@ bool PresentWithGeneration(VulkanContext *vulkan, const VkImage *swapchainImages
 		const VkResult pres = vkQueuePresentKHR(vulkan->GetGraphicsQueue(), &present);
 		if (pres == VK_SUCCESS || pres == VK_SUBOPTIMAL_KHR) {
 			presented_generated++;
+			if (!s_generated_logged) {
+				s_generated_logged = true;
+				LsfgStep("first generated frame presented: frame generation works");
+				g_frameGenStartSettled.store(true, std::memory_order_relaxed);
+			}
 		}
 		if (pres != VK_SUCCESS && pres != VK_SUBOPTIMAL_KHR && worst_generated == VK_SUCCESS) {
 			worst_generated = pres;
@@ -691,6 +721,9 @@ bool PresentWithGeneration(VulkanContext *vulkan, const VkImage *swapchainImages
 	present.pSwapchains = &s_swapchain;
 	present.pImageIndices = &realIndex;
 	*presentResult = vkQueuePresentKHR(vulkan->GetGraphicsQueue(), &present);
+	if (log_steps) {
+		LsfgStep("presented (%u generated, real frame result %d)", presented_generated, (int)*presentResult);
+	}
 	// The caller rebuilds the swapchain on what the real present says, so pass on an earlier error
 	// (OUT_OF_DATE, SURFACE_LOST) that it would otherwise miss. SUBOPTIMAL isn't one: Android returns
 	// it for rotation, and the real present reports it too.

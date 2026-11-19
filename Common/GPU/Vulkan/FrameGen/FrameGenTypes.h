@@ -61,6 +61,15 @@ extern std::atomic<uint32_t> g_frameGenPendingExtraImages;
 // was finished, and one that repeats the previous value isn't interpolated.
 extern std::atomic<uint32_t> g_frameGenContentCounter;
 
+// Set by the render thread once frame generation has shown a generated frame, or failed cleanly.
+// The UI's crash guard (NativeApp.cpp) uses it to tell a start that worked from one that died.
+extern std::atomic<bool> g_frameGenStartSettled;
+
+// Logs a step of starting frame generation at NOTICE, so it's in a file log (Developer tools >
+// Log to file, which flushes every line) whatever the log level. The last one before a crash
+// says where it died.
+void LsfgStep(const char *fmt, ...);
+
 // printf-style logging for the ported code, in the G3D log channel.
 struct LsfgConsoleLog {
 	void WriteLn(const char *fmt, ...) const;

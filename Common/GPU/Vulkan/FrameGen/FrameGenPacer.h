@@ -53,5 +53,6 @@ namespace Vulkan
 		size_t probe_previous_limit{};
 		size_t limit{};
 		u32 probe_failures{};
+		u32 burst_streak{};
 	};
 } // namespace Vulkan
