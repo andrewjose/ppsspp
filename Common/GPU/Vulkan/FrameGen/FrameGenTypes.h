@@ -78,9 +78,14 @@ struct LsfgConsoleLog {
 };
 extern const LsfgConsoleLog LsfgConsole;
 
-// File access, through PPSSPP's File:: functions so content URIs work.
+// File access, through PPSSPP's File:: functions. Content URIs (Android storage) go through Java,
+// which needs a thread attached to the JVM, and the render thread isn't. So after
+// LsfgHost::MarkRenderThread() these refuse content URIs on that thread instead of crashing in
+// getEnv(). Keep what the render thread reads (the DLL copy, the cache) on plain paths.
 namespace LsfgHost {
 bool StatFile(const std::string &path, u64 *size, u64 *mtime);
+// Marks the calling thread as one without JVM access (see above).
+void MarkRenderThread();
 bool FileExists(const std::string &path);
 bool ReadWholeFile(const std::string &path, std::vector<u8> *data);
 // Writes a temporary file and renames it into place.
