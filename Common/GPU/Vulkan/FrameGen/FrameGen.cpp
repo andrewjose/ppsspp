@@ -178,11 +178,13 @@ void FrameGen::Process(const Device& device, vk::CommandBuffer cmdbuf, VkImage i
     }
 
     if (!shaders) {
+        LsfgStep("loading shaders from Lossless.dll");
         shaders.emplace(device);
         if (!shaders->IsValid()) {
             unavailable = true;
             return;
         }
+        LsfgStep("shaders loaded");
     }
 
     peak_guest_extent.width = std::max(peak_guest_extent.width, guest_extent.width);
@@ -191,7 +193,9 @@ void FrameGen::Process(const Device& device, vk::CommandBuffer cmdbuf, VkImage i
     const f32 flow_scale = ConfiguredFlowScale(peak_guest_extent, extent);
     if (!chain || built_extent.width != extent.width || built_extent.height != extent.height ||
         built_format != format || built_flow_scale != flow_scale) {
+        LsfgStep("building passes at %ux%u, flow scale %.2f", extent.width, extent.height, flow_scale);
         Rebuild(device, extent, format, flow_scale);
+        LsfgStep("passes built");
     }
 
     const u64 count = frame_count++;

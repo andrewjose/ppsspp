@@ -20,6 +20,7 @@ LsfgConfig g_lsfgConfig;
 const LsfgConsoleLog LsfgConsole{};
 std::atomic<uint32_t> g_frameGenContentCounter{0};
 std::atomic<uint32_t> g_frameGenPendingExtraImages{0};
+std::atomic<bool> g_frameGenStartSettled{false};
 
 static std::mutex g_pendingMutex;
 static LsfgConfig g_pendingConfig;
@@ -67,6 +68,15 @@ static void LsfgLog(LogLevel level, const char *fmt, va_list args) {
 	case LogLevel::LWARNING: WARN_LOG(Log::G3D, "%s", buf); break;
 	default: INFO_LOG(Log::G3D, "%s", buf); break;
 	}
+}
+
+void LsfgStep(const char *fmt, ...) {
+	va_list args;
+	va_start(args, fmt);
+	char buf[512];
+	vsnprintf(buf, sizeof(buf), fmt, args);
+	va_end(args);
+	NOTICE_LOG(Log::G3D, "LSFG step: %s", buf);
 }
 
 void LsfgConsoleLog::WriteLn(const char *fmt, ...) const {

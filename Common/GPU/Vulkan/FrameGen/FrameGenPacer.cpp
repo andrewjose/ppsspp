@@ -22,6 +22,8 @@ constexpr f32 INTERVAL_SMOOTHING = 0.25f;
 constexpr f32 MINIMUM_BASE_RATE = 10.0f;
 constexpr f32 BURST_CADENCE_RATIO = 3.0f;
 constexpr f32 BURST_TARGET_RATIO = 2.0f;
+// Bursts in a row after which they're taken as the new cadence (PORT: ours, see Plan).
+constexpr u32 BURST_STREAK_RESET = 8;
 constexpr f32 PROBE_THROUGHPUT_TOLERANCE = 0.95f;
 constexpr f32 PROBE_BASE_COLLAPSE_RATIO = 0.70f;
 constexpr f32 PROBE_MARGINAL_GAIN = 1.15f;
@@ -81,11 +83,21 @@ FrameGenPlan FrameGenPacer::Plan(size_t capacity) {
             burst_threshold = std::max(burst_threshold, target_rate * BURST_TARGET_RATIO);
         }
         if (1.0f / interval_seconds > burst_threshold) {
-            DeferEvaluations(interval);
-            output_credit = 0.0f;
+            // PORT: Eden returns here without touching smoothed_interval, so if the cadence really
+            // did speed up (the stall when the passes are first built leaves it at several times
+            // the frame time) every later frame looks like a burst and nothing is generated again.
+            // A burst that keeps going is the new cadence: start the measurement over.
+            if (++burst_streak < BURST_STREAK_RESET) {
+                DeferEvaluations(interval);
+                output_credit = 0.0f;
+                return {};
+            }
+            Stabilize(now);
+            burst_streak = 0;
             return {};
         }
     }
+    burst_streak = 0;
 
     if (interval_seconds > 1.0f / MINIMUM_BASE_RATE) {
         Stabilize(now);
@@ -227,6 +239,7 @@ void FrameGenPacer::Stabilize(Clock::time_point now) {
 
 void FrameGenPacer::Reset() {
     last_frame.reset();
+    burst_streak = 0;
     stable_until.reset();
     probe_until.reset();
     next_probe.reset();
