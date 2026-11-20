@@ -1061,6 +1061,8 @@ static constexpr ConfigSetting graphicsSettings[] = {
 		.Label(I18NCat::GRAPHICS, "Frame generation half precision", "Half-precision shaders"),
 	ConfigSetting("FrameGenAutoPause", SETTING(g_Config, bFrameGenAutoPause), false, CfgFlag::PER_GAME)
 		.Label(I18NCat::GRAPHICS, "Frame generation auto pause", "Pause when the game is too fast for the screen"),
+	ConfigSetting("FrameGenGameImage", SETTING(g_Config, bFrameGenGameImage), true, CfgFlag::PER_GAME)
+		.Label(I18NCat::GRAPHICS, "Frame generation from the game image", "Generate from the game image"),
 	ConfigSetting("FrameGenDllPath", SETTING(g_Config, sFrameGenDllPath), "", CfgFlag::DEFAULT),
 	ConfigSetting("LimitFrameRateTo30", SETTING(g_Config, iLimitFrameRateTo30), (int)FrameRateLimit30::AUTO, CfgFlag::PER_GAME | CfgFlag::REPORT)
 		.Label(I18NCat::GRAPHICS, "Limit framerate to 30 fps").Choices(frameRateLimit30Names),

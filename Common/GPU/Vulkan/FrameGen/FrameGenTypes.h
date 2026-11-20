@@ -38,6 +38,7 @@ struct LsfgConfig {
 	bool LsfgPerformance = true;
 	bool LsfgFp16 = false;
 	bool LsfgAutoPause = false; // present as is when the game rate times the multiplier is above the refresh rate
+	bool LsfgGameImage = true; // interpolate the game's image before it's scaled, and redraw the UI over generated frames
 	u32 LsfgTargetRate = 0;     // output Hz the pacer aims for, 0 = fixed multiplier
 	std::string LsfgDllPath;    // the user's Lossless.dll, copied into our own storage
 	u32 LsfgDllGeneration = 0;  // bumped when a DLL is imported over the same path

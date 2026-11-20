@@ -242,6 +242,9 @@ public:
 	void BeginFrame(bool enableProfiling, bool enableLogProfiler);
 	// These can run on a different thread!
 	void Finish();
+	// Frame generation: marks the draw just recorded into the backbuffer pass as the game image
+	// (see VKRStep::render.frameGenSrc). Main thread.
+	void SetFrameGenGameSource(VKRFramebuffer *src, const int srcRect[4], const float dstRect[4], bool linear);
 	void Present();
 	void CheckNothingPending();
 

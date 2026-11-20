@@ -267,4 +267,7 @@ protected:
 	Draw::Framebuffer *postShaderOutput_ = nullptr;
 	FRect rc_;
 	OutputFlags outputFlags_ = OutputFlags::DEFAULT;
+	// For frame generation: the source rectangle of the final blit, and its rotation.
+	float frameGenUV_[4]{};
+	int frameGenUvRotation_ = 0;
 };

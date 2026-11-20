@@ -9,6 +9,10 @@
 #include "Common/GPU/Vulkan/VulkanContext.h"
 #include "Common/Data/Collections/Hashmaps.h"
 
+namespace VulkanFrameGen {
+struct GameFramePresent;
+}
+
 #if PPSSPP_PLATFORM(IOS)
 // iOS doesn't support a large number of timestamp queries natively.
 // We don't want MoltenVK to fall back to emulation.
@@ -157,6 +161,15 @@ struct FrameData {
 	// For frame generation: the count of new game frames when this frame was finished. A present
 	// with the same count as the previous one shows nothing new and isn't interpolated.
 	uint32_t frameGenContentId = 0;
+	// Frame generation redraws this frame's UI onto its generated frames from this frame's own
+	// descriptor sets and push buffers, in a submission after the frame's fence. This fence follows
+	// that submission, and BeginFrame waits for it before reusing them. The frame also isn't handed
+	// back to BeginFrame (readyForFence) until its present has run.
+	VkFence frameGenFence = VK_NULL_HANDLE;
+	bool frameGenFenceSubmitted = false;
+	bool frameGenDeferReady = false;
+	// The game image was captured this frame (set while running the steps, used by the final submit).
+	bool frameGenCaptured = false;
 
 	// Profiling.
 	QueueProfileContext profile{};
@@ -170,7 +183,7 @@ struct FrameData {
 	void Destroy(VulkanContext *vulkan);
 
 	void AcquireNextImage(VulkanContext *vulkan);
-	VkResult QueuePresent(VulkanContext *vulkan, FrameDataShared &shared);
+	VkResult QueuePresent(VulkanContext *vulkan, FrameDataShared &shared, const VulkanFrameGen::GameFramePresent *frameGenGame = nullptr);
 	// Additional swapchains. Acquiring doesn't wait, and returns false if there's no image ready.
 	bool AcquireExtraSwapchain(VulkanContext *vulkan, VKRSwapchain *swapchain);
 	void PresentExtraSwapchains(VulkanContext *vulkan);

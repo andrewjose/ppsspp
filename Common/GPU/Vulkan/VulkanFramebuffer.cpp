@@ -293,8 +293,10 @@ static VkAttachmentStoreOp ConvertStoreAction(VKRRenderPassStoreAction action) {
 
 VkRenderPass CreateRenderPass(VulkanContext *vulkan, const RPKey &key, RenderPassType rpType, VkSampleCountFlagBits sampleCount) {
 	bool isBackbuffer = rpType == RenderPassType::BACKBUFFER;
+	// KEEP on the backbuffer's colour is frame generation redrawing the UI onto a generated frame,
+	// whose image is already in the attachment layout.
+	const bool backbufferKeep = isBackbuffer && key.colorLoadAction == VKRRenderPassLoadAction::KEEP;
 	if (isBackbuffer) {
-		_dbg_assert_(key.colorLoadAction != VKRRenderPassLoadAction::KEEP);
 		_dbg_assert_(key.depthLoadAction != VKRRenderPassLoadAction::KEEP);
 		_dbg_assert_(key.stencilLoadAction != VKRRenderPassLoadAction::KEEP);
 	}
@@ -324,7 +326,7 @@ VkRenderPass CreateRenderPass(VulkanContext *vulkan, const RPKey &key, RenderPas
 	attachments[attachmentCount].storeOp = ConvertStoreAction(key.colorStoreAction);
 	attachments[attachmentCount].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 	attachments[attachmentCount].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-	attachments[attachmentCount].initialLayout = isBackbuffer ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+	attachments[attachmentCount].initialLayout = (isBackbuffer && !backbufferKeep) ? VK_IMAGE_LAYOUT_UNDEFINED : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 	attachments[attachmentCount].finalLayout = isBackbuffer ? vulkan->GetPresentLayout() : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 	attachmentCount++;
 

@@ -177,6 +177,14 @@ struct VKRStep {
 			// Render pass type. Deduced after finishing recording the pass, from the used pipelines.
 			// NOTE: Storing the render pass here doesn't do much good, we change the compatible parameters (load/store ops) during step optimization.
 			RenderPassType renderPassType;
+			// Frame generation: the game image this backbuffer pass drew, before it was scaled, and
+			// the command index right after that draw. Everything drawn later is the UI, which is
+			// redrawn onto generated frames. frameGenSrc is null when the present wasn't a plain blit.
+			VKRFramebuffer *frameGenSrc;
+			int frameGenSrcRect[4];    // left, top, right, bottom in frameGenSrc's pixels
+			float frameGenDstRect[4];  // left, top, right, bottom in backbuffer pixels
+			uint32_t frameGenCmdIndex;
+			bool frameGenLinear;
 		} render;
 		struct {
 			VKRFramebuffer *src;
@@ -286,6 +294,25 @@ private:
 
 	VKRRenderPass *PerformBindFramebufferAsRenderTarget(const VKRStep &pass, VkCommandBuffer cmd);
 	void PerformRenderPass(const VKRStep &pass, VkCommandBuffer cmd, int curFrame, QueueProfileContext &profile);
+	void RecordRenderCommands(const FastVec<VkRenderData> &commands, size_t firstDraw, VkCommandBuffer cmd, int curFrame,
+		VKRRenderPass *renderPass, RenderPassType rpType, VKRFramebuffer *fb, bool rotateToDisplay, int curWidth, int curHeight,
+		QueueProfileContext &profile);
+#ifdef PPSSPP_HAS_FRAMEGEN
+	bool CaptureFrameGenGameImage(const VKRStep &step, VkCommandBuffer cmd, int curFrame, uint64_t frameId);
+public:
+	// Render thread. Whether this frame's game image was captured (once per frame).
+	bool TakeFrameGenCapture(int curFrame);
+	bool FrameGenOverlayHasDraws(int curFrame) const;
+	void RecordFrameGenOverlay(VkCommandBuffer cmd, uint32_t imageIndex, int curFrame, QueueProfileContext &profile);
+private:
+	struct FrameGenOverlay {
+		FastVec<VkRenderData> cmds;
+		size_t first = 0;
+		RenderPassType rpType{};
+		bool captured = false;
+	};
+	FrameGenOverlay frameGenOverlay_[VulkanContext::MAX_INFLIGHT_FRAMES];
+#endif
 	void PerformCopy(const VKRStep &pass, VkCommandBuffer cmd);
 	void PerformBlit(const VKRStep &pass, VkCommandBuffer cmd);
 	void PerformReadback(const VKRStep &pass, VkCommandBuffer cmd, FrameData &frameData);
