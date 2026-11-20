@@ -1153,6 +1153,7 @@ static void PostFrameGenConfig() {
 	config.LsfgPerformance = g_Config.bFrameGenPerformance;
 	config.LsfgFp16 = g_Config.bFrameGenFp16;
 	config.LsfgAutoPause = g_Config.bFrameGenAutoPause;
+	config.LsfgGameImage = g_Config.bFrameGenGameImage;
 	config.LsfgDllPath = FrameGenRenderThreadDllPath(cacheDir, g_Config.sFrameGenDllPath);
 	config.LsfgDllGeneration = (u32)g_frameGenDllGeneration;
 	config.CacheDir = cacheDir;

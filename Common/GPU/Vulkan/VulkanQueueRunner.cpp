@@ -8,6 +8,9 @@
 #include "Common/Profiler/Profiler.h"
 #include "Common/TimeUtil.h"
 #include "Common/VR/PPSSPPVR.h"
+#ifdef PPSSPP_HAS_FRAMEGEN
+#include "Common/GPU/Vulkan/FrameGen/VulkanFrameGen.h"
+#endif
 
 using namespace PPSSPP_VK;
 
@@ -394,6 +397,11 @@ void VulkanQueueRunner::RunSteps(std::vector<VKRStep *> &steps, int curFrame, Fr
 			}
 			if (perform) {
 				PerformRenderPass(step, cmd, curFrame, frameData.profile);
+#ifdef PPSSPP_HAS_FRAMEGEN
+				if (!step.render.framebuffer && !step.render.swapchain) {
+					frameData.frameGenCaptured = CaptureFrameGenGameImage(step, cmd, curFrame, frameData.frameId);
+				}
+#endif
 			} else if (!step.render.swapchain) {
 				frameData.skipSwap = true;
 			}
@@ -942,6 +950,14 @@ void VulkanQueueRunner::ApplyRenderPassMerge(std::vector<VKRStep *> &steps) {
 		// OK. Now, if it's a render, slurp up all the commands and kill the step.
 		// Also slurp up any pretransitions.
 		dst->preTransitions.append(src->preTransitions);
+		if (src->render.frameGenSrc && !dst->render.frameGenSrc) {
+			// Keep frame generation's game-image marker pointing at the same command.
+			dst->render.frameGenSrc = src->render.frameGenSrc;
+			memcpy(dst->render.frameGenSrcRect, src->render.frameGenSrcRect, sizeof(dst->render.frameGenSrcRect));
+			memcpy(dst->render.frameGenDstRect, src->render.frameGenDstRect, sizeof(dst->render.frameGenDstRect));
+			dst->render.frameGenCmdIndex = (uint32_t)dst->commands.size() + src->render.frameGenCmdIndex;
+			dst->render.frameGenLinear = src->render.frameGenLinear;
+		}
 		dst->commands.insert(dst->commands.end(), src->commands.begin(), src->commands.end());
 		MergeRenderAreaRectInto(&dst->render.renderArea, src->render.renderArea);
 		// So we don't consider it for other things, maybe doesn't matter.
@@ -1237,10 +1253,31 @@ void VulkanQueueRunner::PerformRenderPass(const VKRStep &step, VkCommandBuffer c
 	// Only the main swapchain is rotated to match the display.
 	const bool rotateToDisplay = !fb && !step.render.swapchain;
 
+	RecordRenderCommands(step.commands, 0, cmd, curFrame, renderPass, step.render.renderPassType, fb, rotateToDisplay,
+		curWidth, curHeight, profile);
+	vkCmdEndRenderPass(cmd);
+
+	_dbg_assert_(recordBarrier_.empty());
+
+	if (fb) {
+		// If the desired final layout aren't the optimal layout needed next, early-transition the image.
+		if (step.render.finalColorLayout != fb->color.layout) {
+			recordBarrier_.TransitionColorImageAuto(&fb->color, step.render.finalColorLayout);
+		}
+		if (fb->depth.image && step.render.finalDepthStencilLayout != fb->depth.layout) {
+			recordBarrier_.TransitionDepthStencilImageAuto(&fb->depth, step.render.finalDepthStencilLayout);
+		}
+	}
+}
+
+// The commands of a render pass, already begun. Draws and clears before firstDraw are skipped (their
+// state is still applied): frame generation redraws only the UI drawn after the game image.
+void VulkanQueueRunner::RecordRenderCommands(const FastVec<VkRenderData> &commands, size_t firstDraw, VkCommandBuffer cmd,
+	int curFrame, VKRRenderPass *renderPass, RenderPassType rpType, VKRFramebuffer *fb, bool rotateToDisplay, int curWidth,
+	int curHeight, QueueProfileContext &profile) {
 	VKRGraphicsPipeline *lastGraphicsPipeline = nullptr;
 	VKRComputePipeline *lastComputePipeline = nullptr;
 
-	const auto &commands = step.commands;
 
 	// We can do a little bit of state tracking here to eliminate some calls into the driver.
 	// The stencil ones are very commonly mostly redundant so let's eliminate them where possible.
@@ -1255,13 +1292,12 @@ void VulkanQueueRunner::PerformRenderPass(const VKRStep &step, VkCommandBuffer c
 	int lastStencilCompareMask = -1;
 	int lastStencilReference = -1;
 
-	const RenderPassType rpType = step.render.renderPassType;
 
 	for (size_t i = 0; i < commands.size(); i++) {
 		const VkRenderData &c = commands[i];
 #ifdef _DEBUG
 		if (profile.enabled) {
-			if ((size_t)step.stepType < ARRAY_SIZE(profile.commandCounts)) {
+			if ((size_t)c.cmd < ARRAY_SIZE(profile.commandCounts)) {
 				profile.commandCounts[(size_t)c.cmd]++;
 			}
 		}
@@ -1387,7 +1423,7 @@ void VulkanQueueRunner::PerformRenderPass(const VKRStep &step, VkCommandBuffer c
 			break;
 
 		case VKRRenderCommand::DRAW_INDEXED:
-			if (pipelineOK) {
+			if (pipelineOK && i >= firstDraw) {
 				_dbg_assert_(c.drawIndexed.descSetIndex < descSets->size());
 				VkDescriptorSet set = (*descSets)[c.drawIndexed.descSetIndex].set;
 				_dbg_assert_(set != VK_NULL_HANDLE);
@@ -1401,7 +1437,7 @@ void VulkanQueueRunner::PerformRenderPass(const VKRStep &step, VkCommandBuffer c
 			break;
 
 		case VKRRenderCommand::DRAW:
-			if (pipelineOK) {
+			if (pipelineOK && i >= firstDraw) {
 				_dbg_assert_(c.draw.descSetIndex < descSets->size());
 				VkDescriptorSet set = (*descSets)[c.draw.descSetIndex].set;
 				_dbg_assert_(set != VK_NULL_HANDLE);
@@ -1417,6 +1453,8 @@ void VulkanQueueRunner::PerformRenderPass(const VKRStep &step, VkCommandBuffer c
 
 		case VKRRenderCommand::CLEAR:
 		{
+			if (i < firstDraw)
+				break;
 			// If we get here, we failed to merge a clear into a render pass load op. This is bad for perf.
 			int numAttachments = 0;
 			VkClearRect rc{};
@@ -1462,20 +1500,83 @@ void VulkanQueueRunner::PerformRenderPass(const VKRStep &step, VkCommandBuffer c
 			break;
 		}
 	}
-	vkCmdEndRenderPass(cmd);
+}
 
-	_dbg_assert_(recordBarrier_.empty());
+#ifdef PPSSPP_HAS_FRAMEGEN
+// Frame generation on the game's own image: copies the image the backbuffer pass drew from (before
+// scaling) for frame generation, and keeps the pass's commands so the UI drawn over the game can be
+// redrawn on each generated frame (RecordFrameGenOverlay). The commands' descriptor sets and push
+// buffer ranges belong to this frame; BeginFrame waits for the generated frames before reusing them. Recorded into the frame's own command
+// buffer, where the source's layout is tracked and the copy is ordered against the next frame's
+// rendering into it.
+bool VulkanQueueRunner::CaptureFrameGenGameImage(const VKRStep &step, VkCommandBuffer cmd, int curFrame, uint64_t frameId) {
+	FrameGenOverlay &overlay = frameGenOverlay_[curFrame];
+	overlay.captured = false;
+	VKRFramebuffer *src = step.render.frameGenSrc;
+	if (!src || !VulkanFrameGen::GameImageWanted() || src->color.image == VK_NULL_HANDLE) {
+		return false;
+	}
+	if (step.render.frameGenCmdIndex > step.commands.size()) {
+		return false;
+	}
+	recordBarrier_.TransitionColorImageAuto(&src->color, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+	recordBarrier_.Flush(cmd);
+	if (!VulkanFrameGen::CaptureGameFrame(cmd, src->color.image, step.render.frameGenSrcRect, step.render.frameGenDstRect,
+			step.render.frameGenLinear, frameId)) {
+		return false;
+	}
+	overlay.cmds.clear();
+	overlay.cmds.reserve(step.commands.size());
+	for (size_t i = 0; i < step.commands.size(); i++) {
+		overlay.cmds.push_back(step.commands[i]);
+	}
+	overlay.first = step.render.frameGenCmdIndex;
+	overlay.rpType = step.render.renderPassType;
+	overlay.captured = true;
+	return true;
+}
 
-	if (fb) {
-		// If the desired final layout aren't the optimal layout needed next, early-transition the image.
-		if (step.render.finalColorLayout != fb->color.layout) {
-			recordBarrier_.TransitionColorImageAuto(&fb->color, step.render.finalColorLayout);
-		}
-		if (fb->depth.image && step.render.finalDepthStencilLayout != fb->depth.layout) {
-			recordBarrier_.TransitionDepthStencilImageAuto(&fb->depth, step.render.finalDepthStencilLayout);
+bool VulkanQueueRunner::TakeFrameGenCapture(int curFrame) {
+	FrameGenOverlay &overlay = frameGenOverlay_[curFrame];
+	const bool captured = overlay.captured;
+	overlay.captured = false;
+	return captured;
+}
+
+bool VulkanQueueRunner::FrameGenOverlayHasDraws(int curFrame) const {
+	const FrameGenOverlay &overlay = frameGenOverlay_[curFrame];
+	for (size_t i = overlay.first; i < overlay.cmds.size(); i++) {
+		if (overlay.cmds[i].cmd == VKRRenderCommand::DRAW || overlay.cmds[i].cmd == VKRRenderCommand::DRAW_INDEXED) {
+			return true;
 		}
 	}
+	return false;
 }
+
+// Redraws the UI of the frame's backbuffer pass onto a generated frame, whose swapchain image holds
+// the scaled game image in COLOR_ATTACHMENT_OPTIMAL. Leaves it in the present layout.
+void VulkanQueueRunner::RecordFrameGenOverlay(VkCommandBuffer cmd, uint32_t imageIndex, int curFrame, QueueProfileContext &profile) {
+	const FrameGenOverlay &overlay = frameGenOverlay_[curFrame];
+	RPKey key{
+		VKRRenderPassLoadAction::KEEP, VKRRenderPassLoadAction::CLEAR, VKRRenderPassLoadAction::CLEAR,
+		VKRRenderPassStoreAction::STORE, VKRRenderPassStoreAction::DONT_CARE, VKRRenderPassStoreAction::DONT_CARE,
+	};
+	VKRRenderPass *renderPass = GetRenderPass(key);
+	const RenderPassType rpType = overlay.rpType;
+	VkClearValue clearVal[2]{};
+	VkRenderPassBeginInfo rp_begin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+	rp_begin.renderPass = renderPass->Get(vulkan_, rpType, VK_SAMPLE_COUNT_1_BIT);
+	rp_begin.framebuffer = framebuffers_[imageIndex];
+	rp_begin.renderArea.extent.width = vulkan_->GetBackbufferWidth();
+	rp_begin.renderArea.extent.height = vulkan_->GetBackbufferHeight();
+	rp_begin.clearValueCount = RenderPassTypeHasDepth(rpType) ? 2 : 1;
+	rp_begin.pClearValues = clearVal;
+	vkCmdBeginRenderPass(cmd, &rp_begin, VK_SUBPASS_CONTENTS_INLINE);
+	RecordRenderCommands(overlay.cmds, overlay.first, cmd, curFrame, renderPass, rpType, nullptr, true,
+		vulkan_->GetBackbufferWidth(), vulkan_->GetBackbufferHeight(), profile);
+	vkCmdEndRenderPass(cmd);
+}
+#endif
 
 VKRRenderPass *VulkanQueueRunner::PerformBindFramebufferAsRenderTarget(const VKRStep &step, VkCommandBuffer cmd) {
 	VKRRenderPass *renderPass;

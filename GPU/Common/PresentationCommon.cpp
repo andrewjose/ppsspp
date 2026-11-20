@@ -815,6 +815,11 @@ void PresentationCommon::RunPostshaderPasses(const DisplayLayoutConfig &config, 
 	int postVertsOffset = (int)sizeof(Vertex) * 4;
 
 	float finalU0 = u0, finalU1 = u1, finalV0 = v0, finalV1 = v1;
+	frameGenUV_[0] = u0;
+	frameGenUV_[1] = v0;
+	frameGenUV_[2] = u1;
+	frameGenUV_[3] = v1;
+	frameGenUvRotation_ = uvRotation;
 
 	if (usePostShader && !(isFinalAtOutputResolution && postShaderPipelines_.size() == 1)) {
 		// The final blit will thus use the full texture.
@@ -1267,6 +1272,27 @@ void PresentationCommon::CopyToOutput(const DisplayLayoutConfig &config) {
 	} else {
 		setViewport(0.0f, 0.0f, (float)output.pixelWidth, (float)output.pixelHeight);
 		draw_->Draw(4, 0);
+
+		// Frame generation can interpolate the game image itself, before this scaling, when this
+		// draw was nothing more than a scaled copy of it: no post shader, stereo or rotation, and no
+		// bezel drawn under it. What's drawn after this is redrawn on the generated frames.
+		const bool plainCopy = srcFramebuffer_ && !srcTexture_ && !usePostShader && !useStereo && !vrStereo &&
+			!postShaderOutput_ && pipeline == texColor_ && !(drawOverlay && overlay.layer == OverlayLayer::Background) &&
+			output.rotation == DisplayRotation::ROTATE_0 && frameGenUvRotation_ == ROTATION_LOCKED_HORIZONTAL &&
+			!(outputFlags_ & (OutputFlags::PILLARBOX | OutputFlags::BACKBUFFER_FLIPPED | OutputFlags::NATIVE_SIZE | OutputFlags::RB_SWIZZLE));
+		if (plainCopy) {
+			int fbW = 0, fbH = 0;
+			draw_->GetFramebufferDimensions(srcFramebuffer_, &fbW, &fbH);
+			const int srcRect[4] = {
+				(int)std::lround(frameGenUV_[0] * fbW), (int)std::lround(frameGenUV_[1] * fbH),
+				(int)std::lround(frameGenUV_[2] * fbW), (int)std::lround(frameGenUV_[3] * fbH),
+			};
+			const float dstRect[4] = { rc_.x, rc_.y, rc_.x + rc_.w, rc_.y + rc_.h };
+			if (srcRect[2] > srcRect[0] && srcRect[3] > srcRect[1] && srcRect[0] >= 0 && srcRect[1] >= 0 &&
+				srcRect[2] <= fbW && srcRect[3] <= fbH) {
+				draw_->SetFrameGenGameSource(srcFramebuffer_, srcRect, dstRect, !useNearest);
+			}
+		}
 	}
 
 	if (drawOverlay && overlay.layer == OverlayLayer::Foreground) {

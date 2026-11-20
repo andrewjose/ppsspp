@@ -369,6 +369,7 @@ bool VulkanRenderManager::CreateBackbuffers() {
 	for (int i = 0; i < vulkan_->GetInflightFrames(); i++) {
 		auto &frameData = frameData_[i];
 		frameData.readyForFence = true;  // Just in case.
+		frameData.frameGenDeferReady = false;
 	}
 
 	// Start the thread(s).
@@ -1008,6 +1009,12 @@ void VulkanRenderManager::BeginFrame(bool enableProfiling, bool enableLogProfile
 		if (vkWaitForFences(device, 1, &frameData.fence, true, UINT64_MAX) == VK_ERROR_DEVICE_LOST) {
 			_assert_msg_(false, "Device lost in vkWaitForFences");
 		}
+		if (frameData.frameGenFenceSubmitted) {
+			// The generated frames that redrew this frame's UI from its descriptor sets and buffers.
+			vkWaitForFences(device, 1, &frameData.frameGenFence, true, UINT64_MAX);
+			vkResetFences(device, 1, &frameData.frameGenFence);
+			frameData.frameGenFenceSubmitted = false;
+		}
 	}
 
 	if (!RecreatePresentationIfNeeded()) {
@@ -1401,6 +1408,9 @@ void VulkanRenderManager::BindFramebufferAsRenderTarget(VKRFramebuffer *fb, VKRR
 	step->render.clearStencil = clearStencil;
 	step->render.numDraws = 0;
 	step->render.numReads = 0;
+	step->render.frameGenSrc = nullptr;
+	step->render.frameGenCmdIndex = 0;
+	step->render.frameGenLinear = false;
 	step->render.finalColorLayout = !fb ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
 	step->render.finalDepthStencilLayout = !fb ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED;
 	// pipelineFlags, renderArea and renderPassType get filled in when we finalize the step. Do not read from them before that.
@@ -1893,6 +1903,21 @@ void VulkanRenderManager::Finish() {
 	steps_.clear();
 }
 
+void VulkanRenderManager::SetFrameGenGameSource(VKRFramebuffer *src, const int srcRect[4], const float dstRect[4], bool linear) {
+	// Only the main backbuffer pass, and only once per frame: the first plain present wins.
+	if (!curRenderStep_ || curRenderStep_->render.framebuffer || curRenderStep_->render.swapchain || !src ||
+		curRenderStep_->render.frameGenSrc) {
+		return;
+	}
+	curRenderStep_->render.frameGenSrc = src;
+	for (int i = 0; i < 4; i++) {
+		curRenderStep_->render.frameGenSrcRect[i] = srcRect[i];
+		curRenderStep_->render.frameGenDstRect[i] = dstRect[i];
+	}
+	curRenderStep_->render.frameGenCmdIndex = (uint32_t)curRenderStep_->commands.size();
+	curRenderStep_->render.frameGenLinear = linear;
+}
+
 void VulkanRenderManager::Present() {
 	int curFrame = vulkan_->GetCurFrame();
 	if (VulkanPresentation *presentation = vulkan_->GetPresentation()) {
@@ -1928,7 +1953,22 @@ void VulkanRenderManager::Run(VKRRenderThreadTask &task) {
 	if (task.runType == VKRRunType::PRESENT) {
 		PROFILE_THIS_SCOPE("vk_present");
 		if (!frameData.skipSwap) {
+#ifdef PPSSPP_HAS_FRAMEGEN
+			VulkanFrameGen::GameFramePresent game;
+			game.frameId = frameData.frameId;
+			game.captured = queueRunner_.TakeFrameGenCapture(task.frame);
+			if (game.captured && queueRunner_.FrameGenOverlayHasDraws(task.frame)) {
+				const int frame = task.frame;
+				game.recordOverlay = [this, frame, &frameData](VkCommandBuffer cmd, uint32_t imageIndex) {
+					queueRunner_.RecordFrameGenOverlay(cmd, imageIndex, frame, frameData.profile);
+				};
+			}
+			game.resourcesFence = frameData.frameGenFence;
+			game.resourcesFenceSubmitted = &frameData.frameGenFenceSubmitted;
+			VkResult res = frameData.QueuePresent(vulkan_, frameDataShared_, &game);
+#else
 			VkResult res = frameData.QueuePresent(vulkan_, frameDataShared_);
+#endif
 			frameTimeHistory_[frameData.frameId].queuePresent = time_now_d();
 			if (res == VK_ERROR_OUT_OF_DATE_KHR) {
 				// We clearly didn't get this in vkAcquireNextImageKHR because of the skipSwap check above.
@@ -1960,6 +2000,13 @@ void VulkanRenderManager::Run(VKRRenderThreadTask &task) {
 		frameData.PresentExtraSwapchains(vulkan_);
 		if (VulkanPresentation *presentation = vulkan_->GetPresentation()) {
 			presentation->EndPresent();
+		}
+		if (frameData.frameGenDeferReady) {
+			// Held back at submit for frame generation (see FrameData::frameGenFence).
+			std::lock_guard<std::mutex> lock(frameData.fenceMutex);
+			frameData.frameGenDeferReady = false;
+			frameData.readyForFence = true;
+			frameData.fenceCondVar.notify_one();
 		}
 		return;
 	}

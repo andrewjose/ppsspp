@@ -4,18 +4,22 @@
 //
 // Ported from ARMSX2's GSLsfg.cpp. Kept: the per-image frame slots with their fences, generating
 // into our own images and copying them into the swapchain, fence-waited extra acquires, the single
-// submit and the present order. Left out for now: the "game frame" mode that interpolates the
-// emulator's image before it's scaled, and redrawing the overlay on generated frames. Here the
-// finished screen (UI and touch controls included) is what gets interpolated.
+// submit and the present order, and its "game frame" mode: the emulator's image is interpolated
+// before it's scaled, and the overlay redrawn on generated frames. ARMSX2 redraws its ImGui
+// overlay; PPSSPP's UI is drawn by thin3d, so the queue runner replays the backbuffer pass's own UI
+// commands (RecordFrameGenOverlay). Without a captured game image (post-processing shaders, the
+// setting off), the finished screen is interpolated, UI included.
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "Common/GPU/Vulkan/VulkanContext.h"
@@ -213,6 +217,23 @@ struct GenImage {
 };
 std::vector<GenImage> s_gen_images;
 
+// The game's own image (CaptureGameFrame) is copied into s_capture. It's screen-sized so it isn't
+// replaced when the game's resolution changes; the copy uses its top-left s_capture_extent, which
+// follows the biggest frame seen so a game switching resolution doesn't rebuild the passes each
+// time. A smaller frame is stretched to it and the present stretches it back.
+GenImage s_capture;
+bool s_capture_usable = false;
+VkExtent2D s_capture_extent{};
+VkExtent2D s_peak_game{};
+bool s_captured = false;
+uint64_t s_captured_frame_id = 0;
+float s_draw_rect[4]{};
+bool s_draw_linear = false;
+// For the status line.
+std::atomic<bool> s_status_game{false};
+std::atomic<u32> s_status_width{0};
+std::atomic<u32> s_status_height{0};
+
 // One slot per swapchain image, each with its own fence. A slot isn't reused until its fence
 // says the GPU is done with it: resetting a pending command buffer, or signalling a binary
 // semaphore the previous present hasn't consumed, is undefined.
@@ -311,6 +332,9 @@ void DestroyResources() {
 		g.image = Vulkan::vk::Image();
 	}
 	s_gen_images.clear();
+	s_capture.image = Vulkan::vk::Image();
+	s_capture_usable = false;
+	s_captured = false;
 
 	for (FrameSlot &slot : s_slots) {
 		for (VkFence f : slot.acquire_fences) {
@@ -403,6 +427,38 @@ bool CreateResources(VulkanContext *vulkan) {
 		vci.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 		if (vkCreateImageView(s_vk_device, &vci, nullptr, &g.view) != VK_SUCCESS) {
 			return false;
+		}
+	}
+
+	// The game image is copied into this. Not fatal: without it the finished screen is used. Blits
+	// copy into it (scaling, RGBA to the display's BGRA) and out of the generated images to the screen.
+	{
+		VkFormatProperties disp{}, game{};
+		vkGetPhysicalDeviceFormatProperties(vulkan->GetCurrentPhysicalDevice(), s_format, &disp);
+		vkGetPhysicalDeviceFormatProperties(vulkan->GetCurrentPhysicalDevice(), VK_FORMAT_R8G8B8A8_UNORM, &game);
+		const VkFormatFeatureFlags need = VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT |
+			VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+		const bool blits = (disp.optimalTilingFeatures & need) == need &&
+			(game.optimalTilingFeatures & (VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT)) ==
+				(VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT);
+		if (blits) {
+			VkImageCreateInfo ici{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+			ici.imageType = VK_IMAGE_TYPE_2D;
+			ici.format = s_format;
+			ici.extent = {s_extent.width, s_extent.height, 1};
+			ici.mipLevels = 1;
+			ici.arrayLayers = 1;
+			ici.samples = VK_SAMPLE_COUNT_1_BIT;
+			ici.tiling = VK_IMAGE_TILING_OPTIMAL;
+			ici.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+			ici.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+			ici.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+			s_capture.image = s_allocator->CreateImage(ici);
+		}
+		s_capture_usable = blits && s_capture.image;
+		if (!s_capture_usable) {
+			WARN_LOG(Log::G3D, "LSFG: can't copy the game image (%s); interpolating the finished screen.",
+				blits ? "no image" : "the formats can't be blitted");
 		}
 	}
 
@@ -569,6 +625,9 @@ void Shutdown() {
 	s_frame_index = 0;
 	s_vk_device = VK_NULL_HANDLE;
 	s_have_content_id = false;
+	s_peak_game = {};
+	s_capture_extent = {};
+	s_captured = false;
 	ResetRate();
 
 	s_display_fps.store(0.0f, std::memory_order_relaxed);
@@ -577,9 +636,69 @@ void Shutdown() {
 	s_fps_generated = 0;
 }
 
+
+bool GameImageWanted() {
+	return s_active && s_capture_usable && g_lsfgConfig.LsfgEnabled && g_lsfgConfig.LsfgGameImage &&
+		!s_failed.load(std::memory_order_relaxed);
+}
+
+bool CaptureGameFrame(VkCommandBuffer cmd, VkImage src, const int srcRect[4], const float dstRect[4], bool linear,
+	uint64_t frameId) {
+	s_captured = false;
+	if (!GameImageWanted() || src == VK_NULL_HANDLE || s_extent.width == 0 || s_extent.height == 0) {
+		return false;
+	}
+	const s32 game_w = srcRect[2] - srcRect[0];
+	const s32 game_h = srcRect[3] - srcRect[1];
+	if (game_w <= 0 || game_h <= 0 || srcRect[0] < 0 || srcRect[1] < 0) {
+		return false;
+	}
+
+	// The biggest frame seen, shrunk to fit the screen: past the screen's size there's nothing to
+	// gain, and following the biggest rather than the current frame avoids rebuilding the passes
+	// whenever the game switches resolution.
+	s_peak_game.width = std::max(s_peak_game.width, (u32)game_w);
+	s_peak_game.height = std::max(s_peak_game.height, (u32)game_h);
+	const float fit = std::min({1.0f, (float)s_extent.width / (float)s_peak_game.width,
+		(float)s_extent.height / (float)s_peak_game.height});
+	const VkExtent2D extent{std::max(1u, (u32)((float)s_peak_game.width * fit)), std::max(1u, (u32)((float)s_peak_game.height * fit))};
+
+	// The last reader was frame generation, in an earlier submission; a barrier's first scope covers
+	// everything earlier in submission order. The old contents aren't wanted.
+	TransitionImage(cmd, *s_capture.image, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
+		VK_ACCESS_TRANSFER_WRITE_BIT);
+	VkImageBlit blit{};
+	blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+	blit.srcOffsets[0] = {srcRect[0], srcRect[1], 0};
+	blit.srcOffsets[1] = {srcRect[2], srcRect[3], 1};
+	blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+	blit.dstOffsets[1] = {(s32)extent.width, (s32)extent.height, 1};
+	// A straight copy stays exact; only a frame that has to be scaled is filtered.
+	const bool same_size = extent.width == (u32)game_w && extent.height == (u32)game_h;
+	vkCmdBlitImage(cmd, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, *s_capture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+		&blit, same_size ? VK_FILTER_NEAREST : VK_FILTER_LINEAR);
+	// GENERAL, which the passes' first copy expects.
+	TransitionImage(cmd, *s_capture.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_GENERAL,
+		VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+
+	s_capture_extent = extent;
+	for (int i = 0; i < 4; i++) {
+		s_draw_rect[i] = dstRect[i];
+	}
+	s_draw_linear = linear;
+	s_captured = true;
+	s_captured_frame_id = frameId;
+	return true;
+}
+
 bool PresentWithGeneration(VulkanContext *vulkan, const VkImage *swapchainImages, uint32_t imageCount,
 	uint32_t realIndex, VkSemaphore renderFinished, uint32_t contentId, const void *realPresentNext,
-	VkResult *presentResult) {
+	const GameFramePresent *game, VkResult *presentResult) {
+	// Consumed on every call, generating or not, so a copy from a declined frame is never read as a
+	// later frame's.
+	const bool captured = std::exchange(s_captured, false) && game && game->captured &&
+		game->frameId == s_captured_frame_id;
+
 	LsfgHost::MarkRenderThread();
 	LsfgSyncConfig();
 	if (!g_lsfgConfig.LsfgEnabled || g_lsfgConfig.LsfgDllPath.empty()) {
@@ -657,13 +776,30 @@ bool PresentWithGeneration(VulkanContext *vulkan, const VkImage *swapchainImages
 		vkCmdWriteTimestamp(slot.cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, s_query_pool, slot_index * 2);
 	}
 
-	// The passes expect the presented image in GENERAL; it arrives in PRESENT_SRC_KHR and goes back so.
-	TransitionImage(slot.cmd, real_image, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_GENERAL,
-		VK_ACCESS_MEMORY_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT);
-
-	// Process only null-checks the view; the presented frame is copied into the chain.
+	// Game image mode: the game's own frame was captured this frame (see CaptureGameFrame).
+	const bool game_res = captured && GameImageWanted();
 	const Vulkan::vk::CommandBuffer cmdbuf{slot.cmd};
-	s_frame_gen->Process(*s_device, cmdbuf, real_image, s_gen_images[0].view, s_extent, s_format, s_extent);
+	if (game_res) {
+		// The render-finished wait covers the frame's submission, which wrote the capture; this
+		// barrier makes it visible to the passes' first copy.
+		TransitionImage(slot.cmd, *s_capture.image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_GENERAL,
+			VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+		s_frame_gen->Process(*s_device, cmdbuf, *s_capture.image, s_gen_images[0].view, s_capture_extent, s_format,
+			s_capture_extent);
+	} else {
+		// The passes expect the presented image in GENERAL; it arrives in PRESENT_SRC_KHR and goes back so.
+		TransitionImage(slot.cmd, real_image, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, VK_IMAGE_LAYOUT_GENERAL,
+			VK_ACCESS_MEMORY_READ_BIT, VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT);
+		// Process only null-checks the view; the presented frame is copied into the chain.
+		s_frame_gen->Process(*s_device, cmdbuf, real_image, s_gen_images[0].view, s_extent, s_format, s_extent);
+	}
+	s_status_game.store(game_res, std::memory_order_relaxed);
+	s_status_width.store(game_res ? s_capture_extent.width : s_extent.width, std::memory_order_relaxed);
+	s_status_height.store(game_res ? s_capture_extent.height : s_extent.height, std::memory_order_relaxed);
+	if (log_steps) {
+		LsfgStep("input: %s %ux%u", game_res ? "game image" : "finished screen", game_res ? s_capture_extent.width : s_extent.width,
+			game_res ? s_capture_extent.height : s_extent.height);
+	}
 	s_fp16_active.store(s_frame_gen->UsingFp16(), std::memory_order_relaxed);
 	if (log_steps) {
 		LsfgStep("processed (generator %s)", s_frame_gen->IsUnavailable() ? "unavailable" : "ok");
@@ -682,6 +818,7 @@ bool PresentWithGeneration(VulkanContext *vulkan, const VkImage *swapchainImages
 
 	u32 acquired_index[MAX_GEN]{};
 	size_t acquired = 0;
+	bool redrew_overlay = false;
 	for (size_t i = 0; i < generations && i < acquire_budget && i < MAX_GEN; i++) {
 		// Bounded, but not zero: under FIFO an image only comes back at a vblank, so a zero timeout
 		// returns VK_NOT_READY every time and drops every generated frame (seen on an Adreno 740).
@@ -710,20 +847,58 @@ bool PresentWithGeneration(VulkanContext *vulkan, const VkImage *swapchainImages
 			VK_ACCESS_SHADER_WRITE_BIT, VK_ACCESS_TRANSFER_READ_BIT);
 		TransitionImage(slot.cmd, dst, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 0,
 			VK_ACCESS_TRANSFER_WRITE_BIT);
-		VkImageCopy region{};
-		region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-		region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-		region.extent = {s_extent.width, s_extent.height, 1};
-		vkCmdCopyImage(slot.cmd, *gen.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst,
-			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
-		TransitionImage(slot.cmd, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-			VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_MEMORY_READ_BIT);
+		if (game_res) {
+			// Generated at the game's size: scaled into the rectangle the real frame went to, on black
+			// where it doesn't reach (the acquired image holds whatever it last showed).
+			const auto edge = [](float v, u32 limit) {
+				return (s32)std::clamp<long>(std::lround(v), 0, (long)limit);
+			};
+			const s32 left = edge(s_draw_rect[0], s_extent.width), top = edge(s_draw_rect[1], s_extent.height);
+			const s32 right = edge(s_draw_rect[2], s_extent.width), bottom = edge(s_draw_rect[3], s_extent.height);
+			if (left > 0 || top > 0 || right < (s32)s_extent.width || bottom < (s32)s_extent.height) {
+				const VkClearColorValue black{};
+				const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+				vkCmdClearColorImage(slot.cmd, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+				TransitionImage(slot.cmd, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+					VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+			}
+			if (right > left && bottom > top) {
+				VkImageBlit blit{};
+				blit.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+				blit.srcOffsets[1] = {(s32)s_capture_extent.width, (s32)s_capture_extent.height, 1};
+				blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+				blit.dstOffsets[0] = {left, top, 0};
+				blit.dstOffsets[1] = {right, bottom, 1};
+				vkCmdBlitImage(slot.cmd, *gen.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+					1, &blit, s_draw_linear ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+			}
+		} else {
+			VkImageCopy region{};
+			region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+			region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+			region.extent = {s_extent.width, s_extent.height, 1};
+			vkCmdCopyImage(slot.cmd, *gen.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst,
+				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+		}
+		if (game_res && game->recordOverlay) {
+			// The UI drawn over the game on the real frame, drawn again here.
+			TransitionImage(slot.cmd, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+				VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT);
+			game->recordOverlay(slot.cmd, image_index);
+			redrew_overlay = true;
+		} else {
+			TransitionImage(slot.cmd, dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+				VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_MEMORY_READ_BIT);
+		}
 
 		acquired_index[acquired++] = image_index;
 	}
 
-	TransitionImage(slot.cmd, real_image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-		VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_MEMORY_READ_BIT);
+	// Only the finished-screen input borrowed the real image.
+	if (!game_res) {
+		TransitionImage(slot.cmd, real_image, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+			VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT, VK_ACCESS_MEMORY_READ_BIT);
+	}
 
 	if (s_query_pool != VK_NULL_HANDLE) {
 		vkCmdWriteTimestamp(slot.cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, s_query_pool, slot_index * 2 + 1);
@@ -754,6 +929,16 @@ bool PresentWithGeneration(VulkanContext *vulkan, const VkImage *swapchainImages
 	slot.submitted = true;
 	slot.timed = s_query_pool != VK_NULL_HANDLE;
 	s_frame_index++;
+	if (redrew_overlay && game->resourcesFence != VK_NULL_HANDLE && game->resourcesFenceSubmitted &&
+		!*game->resourcesFenceSubmitted) {
+		// The redrawn UI read the frame's descriptor sets and buffers; an empty submit's fence
+		// signals once everything before it is done.
+		if (vkQueueSubmit(vulkan->GetGraphicsQueue(), 0, nullptr, game->resourcesFence) == VK_SUCCESS) {
+			*game->resourcesFenceSubmitted = true;
+		} else {
+			vkQueueWaitIdle(vulkan->GetGraphicsQueue());
+		}
+	}
 
 	// Generated frames first, they sit between the previous real frame and this one. Presents on
 	// one queue are processed in call order.
@@ -829,12 +1014,15 @@ std::string GetStatusText() {
 		snprintf(buf, sizeof(buf), "LSFG: paused, game too fast (%.0f fps)", s_source_fps.load(std::memory_order_relaxed));
 		return buf;
 	}
-	char buf[96];
+	char buf[128];
+	char input[48];
+	snprintf(input, sizeof(input), "%s %ux%u", s_status_game.load(std::memory_order_relaxed) ? "game" : "screen",
+		s_status_width.load(std::memory_order_relaxed), s_status_height.load(std::memory_order_relaxed));
 	const float gpu_ms = s_gpu_ms.load(std::memory_order_relaxed);
 	if (gpu_ms > 0.0f) {
-		snprintf(buf, sizeof(buf), "LSFG: %.1f fps%s, %.2f ms", fps, s_fp16_active.load() ? " fp16" : "", gpu_ms);
+		snprintf(buf, sizeof(buf), "LSFG: %.1f fps%s, %s, %.2f ms", fps, s_fp16_active.load() ? " fp16" : "", input, gpu_ms);
 	} else {
-		snprintf(buf, sizeof(buf), "LSFG: %.1f fps%s", fps, s_fp16_active.load() ? " fp16" : "");
+		snprintf(buf, sizeof(buf), "LSFG: %.1f fps%s, %s", fps, s_fp16_active.load() ? " fp16" : "", input);
 	}
 	return buf;
 }

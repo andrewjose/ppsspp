@@ -387,6 +387,9 @@ public:
 		};
 	}
 
+#ifdef PPSSPP_HAS_FRAMEGEN
+	void SetFrameGenGameSource(Framebuffer *src, const int srcRect[4], const float dstRect[4], bool linear) override;
+#endif
 	void DebugAnnotate(const char *annotation) override;
 	void Wait() override {
 		vkDeviceWaitIdle(vulkan_->GetDevice());
@@ -1896,6 +1899,14 @@ private:
 	VKRFramebuffer *buf_;
 };
 
+#ifdef PPSSPP_HAS_FRAMEGEN
+void VKContext::SetFrameGenGameSource(Framebuffer *src, const int srcRect[4], const float dstRect[4], bool linear) {
+	if (src) {
+		renderManager_.SetFrameGenGameSource(((VKFramebuffer *)src)->GetFB(), srcRect, dstRect, linear);
+	}
+}
+
+#endif
 Framebuffer *VKContext::CreateFramebuffer(const FramebufferDesc &desc) {
 	_assert_(desc.multiSampleLevel >= 0);
 	_assert_(desc.numLayers > 0);
