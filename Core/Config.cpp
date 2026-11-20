@@ -1054,8 +1054,9 @@ static constexpr ConfigSetting graphicsSettings[] = {
 		.Label(I18NCat::GRAPHICS, "Frame generation multiplier", "Frames shown per game frame").Choices(frameGenMultiplierNames, 2),
 	ConfigSetting("FrameGenPerformance", SETTING(g_Config, bFrameGenPerformance), true, CfgFlag::PER_GAME)
 		.Label(I18NCat::GRAPHICS, "Frame generation performance mode", "Performance mode"),
-	ConfigSetting("FrameGenFlowScale", SETTING(g_Config, iFrameGenFlowScale), 100, CfgFlag::PER_GAME)
-		.Label(I18NCat::GRAPHICS, "Frame generation motion detail", "Motion detail").Range(25, 100, 5).Units("%"),
+	// 0 is automatic. (A new key: the old FrameGenFlowScale used 100 for automatic.)
+	ConfigSetting("FrameGenMotionDetail", SETTING(g_Config, iFrameGenFlowScale), 0, CfgFlag::PER_GAME)
+		.Label(I18NCat::GRAPHICS, "Frame generation motion detail", "Motion detail").Range(0, 100, 5).Units("%").ZeroLabel("Auto"),
 	ConfigSetting("FrameGenFp16", SETTING(g_Config, bFrameGenFp16), false, CfgFlag::PER_GAME)
 		.Label(I18NCat::GRAPHICS, "Frame generation half precision", "Half-precision shaders"),
 	ConfigSetting("FrameGenAutoPause", SETTING(g_Config, bFrameGenAutoPause), false, CfgFlag::PER_GAME)

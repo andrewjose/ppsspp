@@ -1113,7 +1113,7 @@ static void PostFrameGenConfig() {
 	LsfgConfig config;
 	config.LsfgEnabled = g_Config.bFrameGen && GetGPUBackend() == GPUBackend::VULKAN && !g_frameGenCrashedLastRun;
 	config.LsfgMultiplier = (u32)std::clamp(g_Config.iFrameGenMultiplier, 2, 4);
-	config.LsfgFlowScale = (u8)std::clamp(g_Config.iFrameGenFlowScale, 25, 100);
+	config.LsfgFlowScale = g_Config.iFrameGenFlowScale <= 0 ? 0 : (u8)std::clamp(g_Config.iFrameGenFlowScale, 25, 100);
 	config.LsfgPerformance = g_Config.bFrameGenPerformance;
 	config.LsfgFp16 = g_Config.bFrameGenFp16;
 	config.LsfgAutoPause = g_Config.bFrameGenAutoPause;
