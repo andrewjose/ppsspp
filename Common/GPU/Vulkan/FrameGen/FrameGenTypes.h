@@ -34,7 +34,7 @@ inline constexpr size_t MAX_GENERATIONS = 3;
 struct LsfgConfig {
 	bool LsfgEnabled = false;
 	u32 LsfgMultiplier = 2;     // frames displayed per rendered frame, 2..4
-	u8 LsfgFlowScale = 100;     // optical-flow resolution, 25..100 percent
+	u8 LsfgFlowScale = 0;       // optical-flow resolution, 25..100 percent of the screen's; 0 for automatic
 	bool LsfgPerformance = true;
 	bool LsfgFp16 = false;
 	bool LsfgAutoPause = false; // present as is when the game rate times the multiplier is above the refresh rate
