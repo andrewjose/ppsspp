@@ -1,6 +1,10 @@
 PPSSPP - a fast and portable PSP emulator
 =========================================
 
+> **This fork branch** adds Lossless Scaling frame generation for Android (Vulkan, your own
+> `Lossless.dll` required). See [docs/frame-generation.md](docs/frame-generation.md).
+
+
 Created by Henrik Rydgård
 
 Additional code by many contributors, see the Credits screen
