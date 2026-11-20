@@ -35,12 +35,10 @@ constexpr u32 LSFG_RECURRENCE_FRAMES = 2;
 }
 
 [[nodiscard]] f32 ConfiguredFlowScale(VkExtent2D guest_extent, VkExtent2D presented_extent) {
-    // PORT: Eden gates the automatic path on frame_gen_flow_scale_auto, a toggle that defaults on
-    // and that we have no equivalent for. 100% — our default, and the top of the 25..100 range
-    // the UI offers — reads as "do not reduce the flow resolution", and the automatic result is
-    // clamped to 1.0 anyway, so treating it as Eden's auto mode preserves both projects' default
-    // behaviour. Any explicit value below 100 pins the scale exactly where the user put it.
-    if (g_lsfgConfig.LsfgFlowScale < 100) {
+    // PORT: Eden gates the automatic path on frame_gen_flow_scale_auto. Ours is LsfgFlowScale 0;
+    // any other value (25..100) pins the scale where the user put it, 100 being full resolution.
+    // (ARMSX2 used 100 for automatic, which left no way to measure motion at more than 432 lines.)
+    if (g_lsfgConfig.LsfgFlowScale != 0) {
         return ManualFlowScale();
     }
     if (guest_extent.width == 0 || presented_extent.width == 0) {

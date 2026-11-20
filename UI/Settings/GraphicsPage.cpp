@@ -178,7 +178,7 @@ static void BuildFrameGenPage(SettingsPage *page) {
 	page->Setting(&g_Config.bFrameGenPerformance).Enabled(&g_Config.bFrameGen)
 		.Hint({I18NCat::GRAPHICS, "FrameGenPerformanceHint", "Lighter shaders. Recommended on phones and handhelds."});
 	page->Setting(&g_Config.iFrameGenFlowScale).Enabled(&g_Config.bFrameGen)
-		.Hint({I18NCat::GRAPHICS, "FrameGenFlowScaleHint", "100% picks it from the game's resolution. Lower is faster, with less accurate motion."});
+		.Hint({I18NCat::GRAPHICS, "FrameGenFlowScaleHint", "How finely motion is measured. Auto uses 432 lines (40% of a 1080p screen). Higher follows detailed, repeating textures like floors better, at a GPU cost. Lower is faster."});
 	page->Setting(&g_Config.bFrameGenFp16).Enabled(&g_Config.bFrameGen)
 		.Hint({I18NCat::GRAPHICS, "FrameGenFp16Hint", "Faster where the GPU supports it."});
 	page->Setting(&g_Config.bFrameGenAutoPause).Enabled(&g_Config.bFrameGen)
