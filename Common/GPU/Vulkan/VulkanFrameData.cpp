@@ -55,6 +55,8 @@ void FrameData::Init(VulkanContext *vulkan, int index) {
 	// Creating the frame fence with true so they can be instantly waited on the first frame
 	fence = vulkan->CreateFence(true);
 	vulkan->SetDebugName(fence, VK_OBJECT_TYPE_FENCE, StringFromFormat("fence%d", index).c_str());
+	frameGenFence = vulkan->CreateFence(false);
+	frameGenFenceSubmitted = false;
 	readyForFence = true;
 
 	VkQueryPoolCreateInfo query_ci{ VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO };
@@ -68,6 +70,9 @@ void FrameData::Destroy(VulkanContext *vulkan) {
 	vkDestroyCommandPool(device, cmdPoolInit, nullptr);
 	vkDestroyCommandPool(device, cmdPoolMain, nullptr);
 	vkDestroyFence(device, fence, nullptr);
+	vkDestroyFence(device, frameGenFence, nullptr);
+	frameGenFence = VK_NULL_HANDLE;
+	frameGenFenceSubmitted = false;
 	vkDestroyQueryPool(device, profile.queryPool, nullptr);
 	vkDestroySemaphore(device, acquireSemaphore, nullptr);
 
@@ -115,7 +120,7 @@ void FrameData::AcquireNextImage(VulkanContext *vulkan) {
 	}
 }
 
-VkResult FrameData::QueuePresent(VulkanContext *vulkan, FrameDataShared &shared) {
+VkResult FrameData::QueuePresent(VulkanContext *vulkan, FrameDataShared &shared, const VulkanFrameGen::GameFramePresent *frameGenGame) {
 	_dbg_assert_(hasAcquired);
 	hasAcquired = false;
 	_dbg_assert_(!skipSwap);
@@ -159,7 +164,7 @@ VkResult FrameData::QueuePresent(VulkanContext *vulkan, FrameDataShared &shared)
 		}
 		VkResult res = VK_SUCCESS;
 		if (VulkanFrameGen::PresentWithGeneration(vulkan, images, shared.swapchainImageCount_, curSwapchainImage,
-				shared.swapchainImages_[curSwapchainImage].renderingCompleteSemaphore, frameGenContentId, present.pNext, &res)) {
+				shared.swapchainImages_[curSwapchainImage].renderingCompleteSemaphore, frameGenContentId, present.pNext, frameGenGame, &res)) {
 			return res;
 		}
 	}
@@ -334,7 +339,15 @@ void FrameData::Submit(VulkanContext *vulkan, FrameSubmitType type, FrameDataSha
 		vulkan->LockQueue();
 		res = vkQueueSubmit(vulkan->GetGraphicsQueue(), 1, &submit_info, fenceToTrigger);
 		vulkan->UnlockQueue();
-		if (sharedData.useMultiThreading) {
+#ifdef PPSSPP_HAS_FRAMEGEN
+		// The present may redraw this frame's UI onto generated frames; see frameGenFence.
+		frameGenDeferReady = sharedData.useMultiThreading && type == FrameSubmitType::FinishFrame && !skipSwap &&
+			frameGenCaptured;
+#endif
+		if (type == FrameSubmitType::FinishFrame) {
+			frameGenCaptured = false;
+		}
+		if (sharedData.useMultiThreading && !frameGenDeferReady) {
 			std::lock_guard<std::mutex> lock(fenceMutex);
 			readyForFence = true;
 			fenceCondVar.notify_one();

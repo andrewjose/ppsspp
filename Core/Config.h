@@ -434,6 +434,7 @@ public:
 	int iFrameGenFlowScale;  // percent of the screen's resolution motion is measured at, 0 for automatic
 	bool bFrameGenFp16;
 	bool bFrameGenAutoPause;  // pass frames through when the game is too fast for the screen
+	bool bFrameGenGameImage;  // interpolate the game's image before scaling, with the UI redrawn on top
 	std::string sFrameGenDllPath;  // our copy of the user's Lossless.dll
 	int iLimitFrameRateTo30;  // FrameRateLimit30
 	bool bRenderMultiThreading;

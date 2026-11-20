@@ -889,6 +889,11 @@ public:
 	// channels is a bitwise combination of Aspect::COLOR, DEPTH and STENCIL.
 	virtual void InvalidateFramebuffer(FBInvalidationStage stage, Aspect aspects) {}
 
+	// Frame generation (Vulkan): the draw just made into the backbuffer was a plain scaled copy of
+	// src's srcRect (left, top, right, bottom) into dstRect, in backbuffer pixels. Anything drawn
+	// after it in the frame is the UI.
+	virtual void SetFrameGenGameSource(Framebuffer *src, const int srcRect[4], const float dstRect[4], bool linear) {}
+
 	// Dynamic state
 	virtual void SetScissorRect(int left, int top, int width, int height) = 0;
 	virtual void SetViewport(const Viewport &viewport) = 0;

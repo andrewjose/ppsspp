@@ -177,8 +177,10 @@ static void BuildFrameGenPage(SettingsPage *page) {
 		.Hint({I18NCat::GRAPHICS, "FrameGenMultiplierHint", "The game's frame rate times this should match your screen's refresh rate, like 30 fps x2 on a 60 Hz screen."});
 	page->Setting(&g_Config.bFrameGenPerformance).Enabled(&g_Config.bFrameGen)
 		.Hint({I18NCat::GRAPHICS, "FrameGenPerformanceHint", "Lighter shaders. Recommended on phones and handhelds."});
+	page->Setting(&g_Config.bFrameGenGameImage).Enabled(&g_Config.bFrameGen)
+		.Hint({I18NCat::GRAPHICS, "FrameGenGameImageHint", "Interpolates the game's own image before it's scaled to the screen, so motion is measured on the game's real pixels and the on-screen controls and text stay still. Needs no post-processing shader; with one, the finished screen is used."});
 	page->Setting(&g_Config.iFrameGenFlowScale).Enabled(&g_Config.bFrameGen)
-		.Hint({I18NCat::GRAPHICS, "FrameGenFlowScaleHint", "How finely motion is measured. Auto uses 432 lines (40% of a 1080p screen). Higher follows detailed, repeating textures like floors better, at a GPU cost. Lower is faster."});
+		.Hint({I18NCat::GRAPHICS, "FrameGenFlowScaleHint", "How finely motion is measured. Auto uses up to 432 lines (40% of a 1080p screen). A percentage is a share of the image being interpolated: the game image, or the screen. Higher follows detailed, repeating textures like floors better, at a GPU cost. Lower is faster."});
 	page->Setting(&g_Config.bFrameGenFp16).Enabled(&g_Config.bFrameGen)
 		.Hint({I18NCat::GRAPHICS, "FrameGenFp16Hint", "Faster where the GPU supports it."});
 	page->Setting(&g_Config.bFrameGenAutoPause).Enabled(&g_Config.bFrameGen)

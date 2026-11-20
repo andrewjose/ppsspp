@@ -25,7 +25,13 @@ What to expect:
   for it while frame generation is on.
 - Fine repeating textures, like a cobblestone floor, can shimmer or "swim". Turning Performance mode
   off and raising Motion detail (Auto, then 60-100%) reduces it, at a GPU cost.
-- The on-screen controls and the game's HUD are part of the picture, so they can smear a little.
+- By default the in-between pictures are made from the game's own image before it's stretched to
+  your screen ("Generate from the game image"). The smaller picture is cheaper to work on and has no
+  stretching blur to confuse the motion guess, and PPSSPP's on-screen controls, FPS counter and
+  messages are drawn fresh on every picture instead of being guessed, so they stay sharp and still.
+  The game's own HUD is part of the game image and can still smear a little.
+- With a post-processing shader on, or the screen rotated by the system, the finished screen is used
+  instead (the FPS counter shows "screen" instead of "game").
 - Heavy texture upscaling (NNEDI3) competes with frame generation for the GPU; turn it down if the
   game can't hold its frame rate.
 - If PPSSPP ever closes while starting frame generation, the next launch keeps it off and says so in
@@ -77,6 +83,26 @@ generation starts, so it generated nothing at all.
 than the screen to save GPU time. Auto measures at 432 lines (40% of a 1080p screen); 25-100% picks a
 share of the screen's resolution directly. Coarse measurement matches repeating patterns (floor
 tiles) to the wrong neighbour, which is the shimmer.
+
+**Game image mode.** A PSP frame is 480x272 times the render scale, and PPSSPP's present step
+stretches it to the screen (the last draw before the UI). Interpolating the finished screen means
+the motion search runs on an upscaled, blurred copy, and the UI drawn on top (touch controls, FPS
+counter, notifications) gets interpolated as if it were part of the scene. So, like ARMSX2, the
+present step marks its draw of the game image as "a plain scaled copy of this rectangle into that
+one" (only when it really is: no post-processing shader, stereo, rotation or bezel). At the end of
+the frame that rectangle is copied, shrunk to fit the screen but never enlarged, into frame
+generation's input, and the in-between frames are made at that size. Each one is then stretched into
+the same rectangle with the same filter, and the UI is drawn again on top.
+
+ARMSX2 redraws its UI by replaying ImGui's draw lists. PPSSPP's UI is drawn through its own graphics
+layer, which records draw commands into a list per render pass before a render thread turns them
+into Vulkan commands. So the render thread keeps that list for the screen's pass, and for each
+generated frame replays it into a second render pass on the generated image, skipping the draws up
+to and including the game image (their state changes, like viewport and scissor, still apply).
+Those commands point at the frame's own short-lived resources (descriptor sets, vertex data in
+per-frame buffers), which PPSSPP recycles a couple of frames later. Recycling now also waits for the
+generated frames that used them: a fence after their submission, and the frame isn't handed back to
+the emulation thread until its present has run.
 
 **Android storage.** On Android the memory stick is usually storage opened through Java (a
 `content://` address), and Java can only be called from threads registered with it. The render thread
@@ -150,6 +176,47 @@ it's built only where the `FRAMEGEN` CMake option is on (Android by default).
   present), so Developer tools > Log to file (`PSP/SYSTEM/DUMP/log.txt`, flushed per line) shows
   where a driver crash happened.
 
+### Game image mode
+
+- `PresentationCommon::CopyToOutput`: after the final draw, if `srcFramebuffer_` is the source, no
+  post shader (`usePostShader` false), no stereo/VR/cardboard, `pipeline == texColor_`, no background
+  bezel overlay, `output.rotation == ROTATE_0`, `uvRotation == ROTATION_LOCKED_HORIZONTAL` and none
+  of `PILLARBOX | BACKBUFFER_FLIPPED | NATIVE_SIZE | RB_SWIZZLE`: calls
+  `DrawContext::SetFrameGenGameSource(fb, srcRect = uv * fb size, dstRect = rc_, linear)`. A no-op
+  virtual on other backends.
+- `VulkanRenderManager::SetFrameGenGameSource`: only on the main backbuffer step, first call wins;
+  stores the `VKRFramebuffer`, rects, filter and `frameGenCmdIndex = commands.size()` in
+  `VKRStep::render`. `ApplyRenderPassMerge`'s `mergeRenderSteps` carries the marker over with the
+  index offset.
+- `VulkanQueueRunner::RunSteps`, after `PerformRenderPass` on the main backbuffer:
+  `CaptureFrameGenGameImage` transitions the source colour image to `TRANSFER_SRC_OPTIMAL` through
+  `recordBarrier_` (so the tracked layout stays right for the next frame) and calls
+  `VulkanFrameGen::CaptureGameFrame`, which blits it into `s_capture` (screen-sized, swapchain format,
+  top-left `s_capture_extent` = biggest frame seen, shrunk to fit; NEAREST when 1:1) and leaves that
+  in `GENERAL`. Recorded into the frame's present command buffer, so it's ordered against the next
+  frame rendering into the source. The step's commands are copied into
+  `frameGenOverlay_[curFrame]` with the marker index. `FrameData::frameGenCaptured` is set.
+- `FrameData::Submit(FinishFrame)`: with a capture, `readyForFence` isn't set at submit
+  (`frameGenDeferReady`); `Run(PRESENT)` sets it after the present.
+- `Run(PRESENT)` passes a `GameFramePresent` (frame ID, captured, an overlay callback if any draw
+  follows the marker, `FrameData::frameGenFence`).
+- `PresentWithGeneration`, game image path: `Process` reads `s_capture` at `s_capture_extent` (motion
+  detail Auto then uses min(1, 432 / height) of it; a manual percentage is of the game image). Each
+  generated image: clear the acquired swapchain image to black if the rect doesn't cover it, blit
+  the top-left `s_capture_extent` of the generation image into the rect (LINEAR unless the present
+  used nearest), transition to `COLOR_ATTACHMENT_OPTIMAL`, then
+  `VulkanQueueRunner::RecordFrameGenOverlay`: a render pass from `RPKey{KEEP, CLEAR, CLEAR, STORE,
+  DONT_CARE, DONT_CARE}` with the step's `RenderPassType` (compatible with the backbuffer pass;
+  `CreateRenderPass` now allows colour KEEP on the backbuffer with initial layout
+  `COLOR_ATTACHMENT_OPTIMAL`) on `framebuffers_[imageIndex]`, then `RecordRenderCommands` (the command
+  loop split out of `PerformRenderPass`) with `firstDraw = marker`: DRAW, DRAW_INDEXED and CLEAR
+  before it are skipped, everything else applied. Final layout is the present layout. The real image
+  isn't touched. After the submit, an empty `vkQueueSubmit` signals `frameGenFence`;
+  `BeginFrame` waits and resets it after the frame fence, before descriptor and push buffer reuse.
+- Status line: `game WxH` or `screen WxH` after the fps.
+- Needs `BLIT_SRC | BLIT_DST | SAMPLED_IMAGE_FILTER_LINEAR` on the swapchain format and
+  `BLIT_SRC | FILTER_LINEAR` on `R8G8B8A8_UNORM`; otherwise only the finished screen is used.
+
 ### Present sequence
 
 Per new frame, on a slot (its own fence, command buffer, acquire fences, signal semaphores and one
@@ -198,7 +265,7 @@ empty if creation fails). `Vulkan::Device::SetPipelineCache` feeds it to `Create
 ### Settings
 
 `[Graphics]` in ppsspp.ini, per-game: `FrameGen`, `FrameGenMultiplier` (2-4), `FrameGenPerformance`
-(3.1p shader family, default on), `FrameGenMotionDetail` (0 = automatic, 432 lines; otherwise 25-100% of the screen resolution), `FrameGenFp16`. Global:
+(3.1p shader family, default on), `FrameGenMotionDetail` (0 = automatic, 432 lines; otherwise 25-100% of the interpolated image's resolution), `FrameGenFp16`, `FrameGenGameImage` (default on). Global:
 `FrameGenDllPath`. `FrameGenAutoPause` (per game, default off). The import copies the picked file to `PSP/SYSTEM/Lossless.dll`, validates it
 (PE with the performance shader resources), then renames it into place.
 
@@ -206,8 +273,12 @@ empty if creation fails). `Vulkan::Device::SetPipelineCache` feeds it to `Create
 
 - Fine repeating textures (Dracula X Chronicles' cobblestone floor) still shimmer somewhat at full
   motion detail with Performance mode off: optical flow on periodic patterns.
-- The finished screen is interpolated, so the touch controls and on-screen UI get interpolated too.
-  ARMSX2's mode that interpolates the emulator's own image before scaling isn't ported.
+- Game image mode is off with a post-processing shader, Android pre-rotation (a 90/180/270 surface
+  transform; a blit can't rotate) or a background bezel: the finished screen is used, UI included.
+- Anything PPSSPP draws on the screen before the game image (none during normal play) isn't redrawn
+  on generated frames; outside the game rectangle they're black.
+- Switching between game image and finished screen (opening a menu with a post shader, say) rebuilds
+  the passes, a short stall.
 - No GPU check beyond the memory model and null descriptors. On anything other than Adreno 7xx+ it
   may fail to start (the overlay says why) or misbehave.
 - Coming out of passthrough, the first generated frame pairs the last interpolated frame with the
@@ -224,3 +295,4 @@ empty if creation fails). `Vulkan::Device::SetPipelineCache` feeds it to `Create
 | 20 | Fixed never starting (first swapchain counted as a failure), leaked acquired images, unhandled present errors, descriptor reuse at 3x/4x; storage-format check; shut down after a failure. |
 | 22 | Fixed the Android crash on enabling (DLL read from a `content://` path on the render thread); fixed the pacer never generating after the startup stall; startup step logging and crash guard. |
 | 24 | Pacer rides out single hitches; on-disk pipeline cache; Motion detail scale with Auto and a real 100%. |
+| 25 | Game image mode (ported from ARMSX2's game frame mode): interpolates the PSP image before scaling, redraws PPSSPP's UI on generated frames by replaying the backbuffer pass's commands. Setting "Generate from the game image", default on. Status line shows game/screen and the size. |
