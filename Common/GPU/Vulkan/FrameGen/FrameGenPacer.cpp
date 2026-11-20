@@ -24,6 +24,12 @@ constexpr f32 BURST_CADENCE_RATIO = 3.0f;
 constexpr f32 BURST_TARGET_RATIO = 2.0f;
 // Bursts in a row after which they're taken as the new cadence (PORT: ours, see Plan).
 constexpr u32 BURST_STREAK_RESET = 8;
+// PORT: ours. Long frames in a row before the pacer starts its measurement over; fewer are hitches
+// (a shader compile, texture upscaling) and only skip generation for that frame. Eden restarts on
+// the first one, which costs a second without generation for every hitch.
+constexpr u32 HITCH_STREAK_RESET = 3;
+// PORT: ours. An interval this many times the average is a hitch: it isn't averaged in.
+constexpr f32 HITCH_RATIO = 2.5f;
 constexpr f32 PROBE_THROUGHPUT_TOLERANCE = 0.95f;
 constexpr f32 PROBE_BASE_COLLAPSE_RATIO = 0.70f;
 constexpr f32 PROBE_MARGINAL_GAIN = 1.15f;
@@ -87,21 +93,34 @@ FrameGenPlan FrameGenPacer::Plan(size_t capacity) {
             // did speed up (the stall when the passes are first built leaves it at several times
             // the frame time) every later frame looks like a burst and nothing is generated again.
             // A burst that keeps going is the new cadence: start the measurement over.
+            // Taken as the cadence straight away rather than restarting (which waits a second).
             if (++burst_streak < BURST_STREAK_RESET) {
                 DeferEvaluations(interval);
                 output_credit = 0.0f;
                 return {};
             }
-            Stabilize(now);
-            burst_streak = 0;
-            return {};
+            smoothed_interval = interval_seconds;
         }
     }
     burst_streak = 0;
 
-    if (interval_seconds > 1.0f / MINIMUM_BASE_RATE) {
-        Stabilize(now);
-        return {};
+    // PORT: ours (see HITCH_STREAK_RESET). Eden: Stabilize on any interval over 1 / MINIMUM_BASE_RATE.
+    const bool too_long = interval_seconds > 1.0f / MINIMUM_BASE_RATE;
+    const bool hitch = too_long || (smoothed_interval > 0.0f && interval_seconds > smoothed_interval * HITCH_RATIO);
+    if (hitch) {
+        if (smoothed_interval <= 0.0f || ++hitch_streak >= HITCH_STREAK_RESET) {
+            hitch_streak = 0;
+            if (too_long || smoothed_interval <= 0.0f) {
+                Stabilize(now);
+                return {};
+            }
+            // A slower cadence that has lasted: average it in from here.
+        } else {
+            output_credit = 0.0f;
+            return {};
+        }
+    } else {
+        hitch_streak = 0;
     }
 
     smoothed_interval = smoothed_interval > 0.0f
@@ -240,6 +259,7 @@ void FrameGenPacer::Stabilize(Clock::time_point now) {
 void FrameGenPacer::Reset() {
     last_frame.reset();
     burst_streak = 0;
+    hitch_streak = 0;
     stable_until.reset();
     probe_until.reset();
     next_probe.reset();
