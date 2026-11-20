@@ -214,7 +214,7 @@ namespace Vulkan
 		Pipeline LogicalDevice::CreateComputePipeline(const VkComputePipelineCreateInfo& ci) const
 		{
 			VkPipeline handle = VK_NULL_HANDLE;
-			const VkResult res = vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1, &ci, nullptr, &handle);
+			const VkResult res = vkCreateComputePipelines(m_device, Device::PipelineCache(), 1, &ci, nullptr, &handle);
 			if (res != VK_SUCCESS)
 			{
 				LsfgConsole.Error("LSFG: vkCreateComputePipelines() failed: %d", static_cast<int>(res));
@@ -247,6 +247,18 @@ namespace Vulkan
 	// --- Device ----------------------------------------------------------------------------
 
 	static VkDevice s_current_device = VK_NULL_HANDLE;
+
+	static VkPipelineCache s_pipeline_cache = VK_NULL_HANDLE;
+
+	void Device::SetPipelineCache(VkPipelineCache cache)
+	{
+		s_pipeline_cache = cache;
+	}
+
+	VkPipelineCache Device::PipelineCache()
+	{
+		return s_pipeline_cache;
+	}
 
 	VkDevice Device::Current()
 	{

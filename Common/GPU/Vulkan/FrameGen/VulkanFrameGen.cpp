@@ -87,6 +87,71 @@ double s_source_interval_ns = 0.0;
 u32 s_source_samples = 0;
 u32 s_passthrough_flip_count = 0;
 
+// The passes' pipelines, kept on disk next to the extracted shaders so that only the first start
+// compiles them (tico-ppsspp does the same). Vulkan checks a cache's header against the device,
+// but some drivers have crashed on foreign data, so it's checked here too.
+VkPipelineCache s_pipeline_cache = VK_NULL_HANDLE;
+size_t s_pipeline_cache_loaded_size = 0;
+
+std::string PipelineCachePath() {
+	return g_lsfgConfig.CacheDir.empty() ? std::string() : g_lsfgConfig.CacheDir + "/pipelines.bin";
+}
+
+void CreatePipelineCache(VulkanContext *vulkan) {
+	std::vector<u8> data;
+	const std::string path = PipelineCachePath();
+	if (!path.empty() && LsfgHost::FileExists(path) && LsfgHost::ReadWholeFile(path, &data)) {
+		const VkPhysicalDeviceProperties &props = vulkan->GetPhysicalDeviceProperties().properties;
+		VkPipelineCacheHeaderVersionOne header{};
+		bool ok = data.size() >= sizeof(header);
+		if (ok) {
+			memcpy(&header, data.data(), sizeof(header));
+			ok = header.headerSize >= sizeof(header) && header.headerVersion == VK_PIPELINE_CACHE_HEADER_VERSION_ONE &&
+				header.vendorID == props.vendorID && header.deviceID == props.deviceID &&
+				memcmp(header.pipelineCacheUUID, props.pipelineCacheUUID, VK_UUID_SIZE) == 0;
+		}
+		if (!ok) {
+			INFO_LOG(Log::G3D, "LSFG: pipeline cache is from another GPU or driver; starting a new one.");
+			data.clear();
+		}
+	}
+	VkPipelineCacheCreateInfo ci{VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
+	ci.initialDataSize = data.size();
+	ci.pInitialData = data.empty() ? nullptr : data.data();
+	if (vkCreatePipelineCache(vulkan->GetDevice(), &ci, nullptr, &s_pipeline_cache) != VK_SUCCESS) {
+		// Retry empty, in case the driver didn't like the data.
+		ci.initialDataSize = 0;
+		ci.pInitialData = nullptr;
+		data.clear();
+		if (vkCreatePipelineCache(vulkan->GetDevice(), &ci, nullptr, &s_pipeline_cache) != VK_SUCCESS) {
+			s_pipeline_cache = VK_NULL_HANDLE;
+		}
+	}
+	s_pipeline_cache_loaded_size = data.size();
+	Vulkan::Device::SetPipelineCache(s_pipeline_cache);
+	LsfgStep("pipeline cache: %s (%zu bytes)", data.empty() ? "new" : "loaded", data.size());
+}
+
+void SaveAndDestroyPipelineCache(VkDevice device) {
+	Vulkan::Device::SetPipelineCache(VK_NULL_HANDLE);
+	if (s_pipeline_cache == VK_NULL_HANDLE) {
+		return;
+	}
+	size_t size = 0;
+	const std::string path = PipelineCachePath();
+	if (!path.empty() && vkGetPipelineCacheData(device, s_pipeline_cache, &size, nullptr) == VK_SUCCESS &&
+		size > s_pipeline_cache_loaded_size) {
+		std::vector<u8> data(size);
+		if (vkGetPipelineCacheData(device, s_pipeline_cache, &size, data.data()) == VK_SUCCESS &&
+			LsfgHost::WriteWholeFile(path, data.data(), size)) {
+			INFO_LOG(Log::G3D, "LSFG: saved the pipeline cache (%zu bytes).", size);
+		}
+	}
+	vkDestroyPipelineCache(device, s_pipeline_cache, nullptr);
+	s_pipeline_cache = VK_NULL_HANDLE;
+	s_pipeline_cache_loaded_size = 0;
+}
+
 void ResetRate() {
 	s_have_source_time = false;
 	s_source_interval_ns = 0.0;
@@ -462,6 +527,7 @@ bool EnsureInitialized(VulkanContext *vulkan, uint32_t image_count) {
 		return false;
 	}
 
+	CreatePipelineCache(vulkan);
 	LsfgStep("creating the frame generator");
 	s_frame_gen.emplace(*s_allocator, vulkan);
 	s_first_frames_logged = 0;
@@ -485,6 +551,9 @@ void Shutdown() {
 		vkDeviceWaitIdle(s_vk_device);
 	}
 	s_frame_gen.reset();
+	if (s_vk_device != VK_NULL_HANDLE) {
+		SaveAndDestroyPipelineCache(s_vk_device);
+	}
 	DestroyResources();
 	s_allocator.reset();
 	s_device.reset();
