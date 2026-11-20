@@ -266,6 +266,11 @@ namespace Vulkan
 		/// The device frame generation runs on. There is only ever one; see CreateWrappedDescriptorSets.
 		static VkDevice Current();
 
+		/// PORT: ours. Pipeline cache the passes are built with (VK_NULL_HANDLE for none). Owned by
+		/// VulkanFrameGen, which loads and saves it.
+		static void SetPipelineCache(VkPipelineCache cache);
+		static VkPipelineCache PipelineCache();
+
 	private:
 		VulkanContext* m_device = nullptr;
 		vk::LogicalDevice m_logical;
