@@ -437,7 +437,7 @@ public:
 	bool bFrameGen;
 	int iFrameGenMultiplier;  // frames displayed per game frame, 2-4
 	bool bFrameGenPerformance;
-	int iFrameGenFlowScale;  // percent
+	int iFrameGenFlowScale;  // percent of the screen's resolution motion is measured at, 0 for automatic
 	bool bFrameGenFp16;
 	bool bFrameGenAutoPause;  // pass frames through when the game is too fast for the screen
 	std::string sFrameGenDllPath;  // our copy of the user's Lossless.dll

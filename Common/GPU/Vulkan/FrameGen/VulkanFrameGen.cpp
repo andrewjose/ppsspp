@@ -66,7 +66,7 @@ uint32_t s_slot_count = 0;
 u32 s_first_frames_logged = 0;
 bool s_generated_logged = false;
 uint32_t s_multiplier = 1;
-u8 s_flow_scale_percent = 100;
+u8 s_flow_scale_percent = 0;
 bool s_performance_requested = false;
 bool s_fp16_requested = false;
 std::string s_dll_path;
@@ -434,7 +434,7 @@ uint32_t ExtraAcquirable(VulkanContext *vulkan, uint32_t image_count) {
 
 bool SettingsMatch() {
 	const u32 multiplier = std::clamp<u32>(g_lsfgConfig.LsfgMultiplier, 2, 4);
-	const u8 flow = std::clamp<u8>(g_lsfgConfig.LsfgFlowScale, 25, 100);
+	const u8 flow = g_lsfgConfig.LsfgFlowScale;
 	return multiplier == s_multiplier && flow == s_flow_scale_percent &&
 		g_lsfgConfig.LsfgPerformance == s_performance_requested && g_lsfgConfig.LsfgFp16 == s_fp16_requested &&
 		g_lsfgConfig.LsfgDllPath == s_dll_path && g_lsfgConfig.LsfgDllGeneration == s_dll_generation;
@@ -502,7 +502,7 @@ bool EnsureInitialized(VulkanContext *vulkan, uint32_t image_count) {
 	s_extent = extent;
 	s_format = format;
 	s_multiplier = std::clamp<u32>(g_lsfgConfig.LsfgMultiplier, 2, 4);
-	s_flow_scale_percent = std::clamp<u8>(g_lsfgConfig.LsfgFlowScale, 25, 100);
+	s_flow_scale_percent = g_lsfgConfig.LsfgFlowScale;
 	s_performance_requested = g_lsfgConfig.LsfgPerformance;
 	s_fp16_requested = g_lsfgConfig.LsfgFp16;
 

@@ -124,7 +124,7 @@ signal semaphores:
 ### Settings
 
 `[Graphics]` in ppsspp.ini, per-game: `FrameGen`, `FrameGenMultiplier` (2-4), `FrameGenPerformance`
-(3.1p shader family, default on), `FrameGenFlowScale` (25-100), `FrameGenFp16`. Global:
+(3.1p shader family, default on), `FrameGenMotionDetail` (0 = automatic, 432 lines; otherwise 25-100% of the screen resolution), `FrameGenFp16`. Global:
 `FrameGenDllPath`. `FrameGenAutoPause` (per game, default off). The import copies the picked file to `PSP/SYSTEM/Lossless.dll`, validates it
 (PE with the performance shader resources), then renames it into place.
 
